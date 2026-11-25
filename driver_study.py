@@ -80,26 +80,38 @@ def measure_queue(store, batch_size, samples, expected):
             "captured_selects_per_finder_call": len(statements)}
 
 
-def run(rows, batch_size, samples, seed):
+def run_queues(rows, batch_size, samples, seed, *, methods, measure,
+               experiment_ids=ALL_EXPERIMENTS, fresh_only=False):
+    """Build migrated fixtures and verify the ordered results for each workload."""
     report = {
         "mlflow_revision": MLFLOW_REVISION, "system": platform.system(), "architecture": platform.machine(),
         "python": platform.python_version(), "packages": {p: version(p) for p in
         ("mlflow", "SQLAlchemy", "psycopg2-binary")}, "rows": rows, "batch_size": batch_size,
-        "samples_per_method": samples, "order_cycle": list(permutations(METHODS)),
-        "experiment_ids": list(ALL_EXPERIMENTS), "cutoff_ms": CUTOFF, "seed": seed, "cases": [],
+        "samples_per_method": samples, "order_cycle": list(permutations(methods)),
+        "experiment_ids": list(experiment_ids), "cutoff_ms": CUTOFF, "seed": seed, "cases": [],
     }
-    for label, pct, layout in (("fresh", 0, "oldest_first"), ("oldest_first", 95, "oldest_first"),
-                               ("scattered", 95, "scattered")):
+    queues = [("fresh", 0, "oldest_first")]
+    if not fresh_only:
+        queues.extend([("oldest_first", 95, "oldest_first"), ("scattered", 95, "scattered")])
+    for label, pct, layout in queues:
         with local_database() as (sql, uri), open_store(uri) as store:
             counts = prepare_driver_queue(sql, rows, pct, layout=layout, seed=seed)
             queue = inspect_queue(sql, batch_size)
-            expected = queue.pop("expected_rows")
             remaining = sum(group["remaining"] for group in queue["strata"])
             archived = sum(group["archived"] for group in queue["strata"])
             if (archived != counts["archived"] or remaining + archived != counts["eligible_before"]
-                    or archived != counts["eligible_before"] * pct // 100
-                    or len(expected) != min(batch_size, remaining)):
+                    or archived != counts["eligible_before"] * pct // 100):
                 raise RuntimeError(f"Unexpected archive population for {label}")
+            if label == "oldest_first":
+                archived_strata = queue["strata"]
+            elif label == "scattered" and queue["strata"] != archived_strata:
+                raise RuntimeError("Archived counts by experiment and span count differ between layouts")
+            if tuple(experiment_ids) != ALL_EXPERIMENTS:
+                queue = inspect_queue(sql, batch_size, experiment_ids)
+                remaining = sum(group["remaining"] for group in queue["strata"])
+            expected = queue.pop("expected_rows")
+            if len(expected) != min(batch_size, remaining):
+                raise RuntimeError(f"Unexpected batch size in selected scope for {label}")
             settings = postgres_settings(sql)
             revision = sql("SELECT version_num FROM alembic_version ORDER BY version_num")
             cases = report["cases"]
@@ -107,14 +119,16 @@ def run(rows, batch_size, samples, seed):
                 if (settings != report["postgres_settings"] or revision != report["alembic_revision"]
                         or queue["header_sha256"] != cases[0]["header_sha256"]):
                     raise RuntimeError("Database settings, migrations or trace headers changed between queues")
-                if label == "scattered" and queue["strata"] != cases[-1]["strata"]:
-                    raise RuntimeError("Archived counts by experiment and span count differ between layouts")
             report.update(postgres_settings=settings, alembic_revision=revision)
-            timings = measure_queue(store, batch_size, samples, expected)
+            timings = measure(store, batch_size, samples, expected)
             digest = hashlib.sha256("\n".join(expected).encode()).hexdigest()
             cases.append({"layout": label, "archived_pct": pct, **counts, **queue, "remaining": remaining,
                           "returned": len(expected), "result_sha256": digest, **timings})
     return report
+
+
+def run(rows, batch_size, samples, seed):
+    return run_queues(rows, batch_size, samples, seed, methods=METHODS, measure=measure_queue)
 
 
 def print_table(report):

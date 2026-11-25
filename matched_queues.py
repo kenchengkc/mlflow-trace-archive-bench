@@ -36,7 +36,7 @@ TRACE_STATE = """
 """
 
 
-def inspect_queue(sql: Sql, batch_size: int) -> dict:
+def inspect_queue(sql: Sql, batch_size: int, experiment_ids=ALL_EXPERIMENTS) -> dict:
     header_hash = hashlib.sha256()
     strata = {}
     expected_rows = []
@@ -46,7 +46,7 @@ def inspect_queue(sql: Sql, batch_size: int) -> dict:
     for line in sql(TRACE_STATE).splitlines():
         trace, experiment, millis, status, spans, live, archived, blocked = line.split("|")
         header_hash.update(f"{trace}|{experiment}|{millis}|{status}\n".encode())
-        if int(experiment) not in ALL_EXPERIMENTS or int(millis) > 1700000000000 or status == "IN_PROGRESS":
+        if int(experiment) not in experiment_ids or int(millis) > 1700000000000 or status == "IN_PROGRESS":
             continue
         headers += 1
         eligible = live == "t" and blocked == "f"

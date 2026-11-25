@@ -1,5 +1,7 @@
 __pycache__/
 .venv/
 /driver-study.json.gz
+/two-step.json.gz
+/two-step-rare.json.gz
 benchmark-result.json
 study-result.json.gz
