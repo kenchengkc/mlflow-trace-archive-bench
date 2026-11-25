@@ -8,17 +8,19 @@ An MLflow operator reported that asking PostgreSQL 16 for just three traces coul
 
 MLflow Tracing records what happens during an AI request, including individual model and tool calls. Databricks uses those traces for debugging, evaluation, and monitoring. The open-source MLflow tracking server supports a PostgreSQL backend. Its archival worker needs to find completed traces whose span data can move out of the tracking database. A slow selection query can delay each pass before the worker moves its first trace. The measurements here apply to that open-source SQL path. Databricks also offers managed trace storage in Unity Catalog. [Databricks tracing overview](https://docs.databricks.com/aws/en/mlflow3/genai/tracing/overview) · [MLflow candidate selection](https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/mlflow/store/tracking/sqlalchemy_store.py)
 
-## First measurement
+## PostgreSQL 16 result
 
-Median server execution time for a batch of 100, measured on a 100,000-trace synthetic database with PostgreSQL 14.19 on macOS arm64. Each cell represents seven warm executions.
+Median time to select the next **100 traces** from 100,000 synthetic traces on a four-CPU Ubuntu runner with PostgreSQL 16.16. Each cell represents seven warm executions.
 
 | Oldest eligible traces already archived | Without the archival index | With the archival index |
 | ---: | ---: | ---: |
-| 0% | 13.39 ms | 1.20 ms |
-| 50% | 44.21 ms | 33.45 ms |
-| 95% | 18.54 ms | 63.31 ms |
+| 0% | 20.79 ms | 2.00 ms |
+| 50% | 76.03 ms | 59.99 ms |
+| 95% | 36.08 ms | 114.21 ms |
 
-The representative plan with the index returned 129 rows from its trace index scan to find the first 100 candidates at 0% archived. At 95% archived, the same scan returned 85,489 rows into the downstream filters to find 100 candidates. That explains why removing the sort can help early in a queue while making the later batches more expensive on this fixture. [Raw timings, plans and settings](results/postgresql-14-macos.json)
+At 0% archived, the index scan returned 129 rows to the downstream filters to find 100 candidates. At 95%, it returned 85,489 to find the same batch size. The ordered index lets the database stop early when it finds eligible rows quickly. As the archived prefix grows, it can walk past thousands of old entries to fill one batch. That makes late archival passes worth testing separately. [PostgreSQL 16 timings and query plans](results/postgresql-16-linux.json) · [GitHub Actions run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45566898505)
+
+A second run on PostgreSQL 14.19 on macOS arm64 showed the same change in direction. With 95% archived, its median times were 18.54 ms without the archival index and 63.31 ms with it. [PostgreSQL 14 timings and query plans](results/postgresql-14-macos.json)
 
 ## Run it
 
