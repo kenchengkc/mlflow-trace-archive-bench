@@ -24,6 +24,10 @@ on:
         description: Compare the MLflow finder, bounded probe and two-step selector
         type: boolean
         default: false
+      chunk_study:
+        description: Measure the MLflow finder at the 1,000-experiment chunk boundary
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -54,7 +58,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -70,7 +74,20 @@ jobs:
           "$RUNNER_TEMP/driver-env/bin/python" -m pip install -r requirements-driver.txt
           echo "$RUNNER_TEMP/driver-env/bin" >> "$GITHUB_PATH"
       - name: Check the migrated fixtures and concurrent writes
+        if: inputs.driver_study || inputs.two_step_study
         run: python -m unittest -v test_driver_fixture test_two_step
+      - name: Check the tied batch across the experiment chunk boundary
+        if: inputs.chunk_study
+        run: python -m unittest -v test_chunk_study
+      - name: Measure MLflow with 1,000 and 1,001 experiments
+        if: inputs.chunk_study
+        run: python chunk_study.py --output chunk-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.chunk_study
+        with:
+          name: chunk-study
+          path: chunk-study.json.gz
+          if-no-files-found: error
       - name: Measure the three queues
         if: inputs.driver_study
         run: python driver_study.py --output driver-study.json.gz >> "$GITHUB_STEP_SUMMARY"
