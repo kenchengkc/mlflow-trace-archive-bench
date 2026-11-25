@@ -2,42 +2,55 @@
 
 [![PostgreSQL benchmark CI](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/workflows/postgres.yml/badge.svg?branch=main)](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/workflows/postgres.yml)
 
-A reproducible PostgreSQL benchmark for the query MLflow uses to select traces for archival. It compares three ways to find the oldest eligible traces, checks that they return identical rows in identical order, and records their execution plans.
+A PostgreSQL benchmark for the query MLflow uses to choose its next batch of traces to archive. It compares three SQL strategies and checks that each returns the same traces in the same order.
 
-When an MLflow user reported waiting minutes for PostgreSQL to select three traces, the maintainers added an index on timestamp and trace ID. This benchmark builds on that fix by testing what happens as the archive queue drains. MLflow contributors can use the same dataset to try a query change on a fresh queue and again after the oldest 95% of eligible traces have been archived. [Original issue](https://github.com/mlflow/mlflow/issues/24895) · [Upstream fix](https://github.com/mlflow/mlflow/pull/24976)
+MLflow added an index on timestamp and trace ID after a user reported waiting minutes to select three traces. This project builds on that fix by measuring what happens as the oldest traces leave the queue. [Operator report](https://github.com/mlflow/mlflow/issues/24895) · [Upstream fix](https://github.com/mlflow/mlflow/pull/24976)
+
+## Results
+
+On **one million synthetic traces**, MLflow’s global query selected the first batch of 100 in **1.24 ms**. After the oldest 95% of eligible traces had been archived, the same query took **1,315.50 ms**. An alternative that checks a short prefix of the queue took **284.59 ms** for that late batch.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/strategy-study/query-latency-dark.png">
+  <img src="results/strategy-study/query-latency.png" alt="Time to select 100 traces across eight experiments. The global query was fastest at 0% archived and the bounded probe was fastest at 95% archived. Exact times and observed ranges follow.">
+</picture>
+
+Measured on PostgreSQL 16.16. Each timing includes server planning and execution. Both workloads used all eight experiments and the same indexes. [Fresh-queue samples and plan](results/strategy-study/million-start.json.gz) · [Late-queue samples and plan](results/strategy-study/million-late.json.gz) · [How the queries work](results/strategy-study/README.md#three-queries-identical-answers)
+
+<details>
+<summary>Exact timings and observed ranges</summary>
+
+Each cell gives the median followed by the minimum and maximum of six measured runs, in milliseconds.
+
+| Query | Fresh queue | 95% archived |
+| --- | ---: | ---: |
+| Global (MLflow) | **1.24** (1.20–1.33) | 1,315.50 (1,311.40–1,331.15) |
+| Per-experiment merge | 4.51 (4.38–4.69) | 1,848.73 (1,804.38–1,865.08) |
+| Bounded probe | 27.95 (27.09–30.26) | **284.59** (282.93–287.06) |
+
+</details>
+
+At 95% archived, the global query passed 853,678 trace headers to its eligibility checks. The bounded probe checked 200 headers, then switched to filtering the full set. On the fresh queue, PostgreSQL’s just-in-time compilation accounted for most of the probe’s overhead. [Execution plans and controlled experiment](results/strategy-study/README.md#why-the-first-batch-was-slow)
 
 ## Quick start
 
-Inspect a published run with Git and Python 3.10+. The report reader uses only the Python standard library.
+Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
 
 ```sh
 git clone https://github.com/kenchengkc/mlflow-trace-archive-bench.git
 cd mlflow-trace-archive-bench
-python3 summarize.py results/strategy-study/million-late.json.gz --with-planning
+python3 summarize.py results/strategy-study/matrix.json.gz \
+  --scope 8 --batch-size 100 --archived-pct 95 --with-planning
 ```
 
-## Results
+For that workload the bounded probe took **21.52 ms**, compared with **17.26 ms** for the global query. At the same archive depth across all eight experiments, the probe used only 26% of the global query’s time. Remove the filters to inspect all 45 cases.
 
-On PostgreSQL 16.16, each query selected **100 traces from one million synthetic traces** across eight experiments. Each figure is the median of six measurements and includes server planning and execution. The percentages refer to the share of initially eligible traces already archived, oldest first.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/strategy-study/scope-and-depth-dark.png">
+  <img src="results/strategy-study/scope-and-depth.png" alt="Bounded probe time divided by global query time on 100,000 traces. At 95% archived, the ratios are 0.40 for the frequent experiment, 1.25 for the rare experiment and 0.26 for all eight. Values below one favor the probe.">
+</picture>
 
-![Median query time on a logarithmic scale. The global query was fastest on a fresh queue at 1.24 ms. With 95% archived, the bounded probe was fastest at 284.59 ms.](results/strategy-study/query-latency.png)
-
-<details>
-<summary>Exact timings and query descriptions</summary>
-
-| Query | Selection strategy | 0% archived | 95% archived |
-| --- | --- | ---: | ---: |
-| Global (MLflow) | Find the oldest eligible traces across all selected experiments. | **1.24 ms** | 1,315.50 ms |
-| Per experiment | Take up to 100 eligible traces from each experiment, then merge the results. | 4.51 ms | 1,848.73 ms |
-| Bounded probe | Check the oldest matching trace headers first. If the batch is short and more headers remain, evaluate the full eligible set. | 27.95 ms | **284.59 ms** |
-
-</details>
-
-At 95% archived, the global query passed **853,678 trace headers** to subsequent checks to fill one batch. The bounded probe checked 200 headers, then switched to its fallback. A separate experiment traced most of the bounded probe’s first-batch overhead to PostgreSQL’s just-in-time compilation. [Query plans and compilation experiment](results/strategy-study/README.md)
-
-Experiment selection changes the outcome. On 100,000 traces at 95% archived, the bounded probe used 26% of the global query’s time across all eight experiments and 125% when selecting only the rare experiment. The chart compares experiment 1 (frequent), experiment 8 (rare), and all eight at five stages of archival. [Full timing table](results/strategy-study/matrix.md)
-
-![Bounded probe time relative to global query time. A point left of 1× favors the bounded probe. At 95% archived the ratios are 0.40× for the frequent experiment, 1.25× for the rare experiment, and 0.26× across all eight.](results/strategy-study/scope-and-depth.png)
+[Full timing table](results/strategy-study/matrix.md) · [Raw samples and query plans](results/strategy-study/matrix.json.gz) · [Workload and timing method](results/strategy-study/README.md#workload-and-timing)
 
 ## Reproduce the benchmark
 

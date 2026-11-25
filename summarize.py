@@ -53,10 +53,30 @@ def experiment_label(ids: list[int]) -> str:
     return ", ".join(map(str, ids)) or "∅"
 
 
-def summary(report: dict, buffers: bool, with_planning: bool = False) -> str:
+def parse_scope(value: str) -> frozenset[int]:
+    try:
+        ids = frozenset(int(item) for item in value.split(","))
+    except ValueError:
+        ids = frozenset()
+    if not ids or any(i < 0 or i > 2147483647 for i in ids):
+        raise argparse.ArgumentTypeError("use comma-separated nonnegative PostgreSQL integer experiment IDs")
+    return ids
+
+
+def summary(report: dict, buffers: bool, with_planning: bool = False, *,
+            batch_size: int | None = None, archived_pct: int | None = None,
+            scope: frozenset[int] | None = None) -> str:
     cases = report["cases"]
     if not cases or any("strategies" not in case for case in cases):
         raise ValueError("expected a study report with three strategy measurements per case")
+    cases = [
+        case for case in cases
+        if (batch_size is None or case["batch_size"] == batch_size)
+        and (archived_pct is None or case["archived_pct"] == archived_pct)
+        and (scope is None or frozenset(case["experiment_ids"]) == scope)
+    ]
+    if not cases:
+        raise ValueError("no cases match the requested filters")
 
     version = report["postgres_settings"]["server_version"]
     timing = "Times are median server execution times in milliseconds."
@@ -121,12 +141,20 @@ def main() -> None:
                         help="include shared-buffer hits plus reads from each representative plan")
     parser.add_argument("--with-planning", action="store_true",
                         help="add each sample's planning time to its execution time before comparing medians")
+    parser.add_argument("--batch-size", type=int, help="show cases with this batch size")
+    parser.add_argument("--archived-pct", type=int, help="show cases with this archived percentage (0–100)")
+    parser.add_argument("--scope", type=parse_scope, help="match exactly this set of experiment IDs, e.g. 1,2,3")
     args = parser.parse_args()
+    if args.batch_size is not None and args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
+    if args.archived_pct is not None and not 0 <= args.archived_pct <= 100:
+        parser.error("--archived-pct must be between 0 and 100 inclusive")
     opener = gzip.open if args.results.suffix.lower() == ".gz" else open
     try:
         with opener(args.results, "rt", encoding="utf-8") as source:
             report = json.load(source)
-        print(summary(report, args.buffers, args.with_planning))
+        print(summary(report, args.buffers, args.with_planning, batch_size=args.batch_size,
+                      archived_pct=args.archived_pct, scope=args.scope))
     except (OSError, EOFError, ValueError, KeyError, TypeError) as exc:
         parser.exit(2, f"{parser.prog}: {args.results}: {exc}\n")
 

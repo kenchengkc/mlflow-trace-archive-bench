@@ -10,7 +10,17 @@ The shipped index lets PostgreSQL walk traces in archival order. That is cheap w
 | [Per experiment](../../sql/per_experiment.sql) | Takes the oldest K eligible traces per experiment, then merges and limits the combined rows. A trace ranked below K in its own experiment cannot enter the global first K. This implements the operator’s suggested approach in one SQL statement. |
 | [Bounded probe](../../sql/bounded_probe.sql) | Examines the oldest matching trace headers, up to twice K with a cap of 4,096. It checks their spans and tags. If that fills the batch or exhausts the headers, it returns the prefix’s eligible rows. Otherwise it recomputes eligibility across the selected experiments and sorts those results. |
 
-Both branches of the bounded query see the same statement snapshot. The fallback computes a complete answer when the bounded prefix is inconclusive. Each call starts fresh, so an old trace that finishes later can still enter the next batch. The cap bounds the number of matching headers fed to eligibility checks. PostgreSQL may read more index entries or pages to find them.
+### How the bounded probe chooses a batch
+
+```mermaid
+flowchart TD
+    probe["Read the oldest matching headers up to the probe limit"] --> check["Check spans and tags for eligibility"]
+    check --> enough{"Full batch or fewer headers than the probe limit?"}
+    enough -->|Yes| prefix["Return the eligible prefix rows in archival order"]
+    enough -->|No| fallback["Filter all matching traces and return the oldest eligible batch"]
+```
+
+For a batch of 100, the probe limit is 200 headers. If only 150 matching headers exist, the probe has seen them all and can return a partial batch. If it sees 200 and finds only 99 eligible traces, it takes the fallback. Both branches see the same database snapshot. The cap applies to headers passed to eligibility checks. PostgreSQL may read more index entries or pages to find them.
 
 ## What changed at one million traces
 
@@ -54,5 +64,7 @@ python3 study.py --rows 1000000 --archived-pct 0 95 --scope 1,2,3,4,5,6,7,8 --ba
 ```
 
 Add `--jit-control` to repeat the compilation experiment, then run `summarize.py --with-planning` on the report.
+
+To regenerate the README charts from the published reports, install Matplotlib in your plotting environment and run `python3 results/strategy-study/plot.py` from the repository root.
 
 For a self-contained SQL example, run `psql -X -d scratch -f results/strategy-study/late-queue.sql` from the checkout. It uses regular PostgreSQL tables in a fresh schema, prints all three plans, and verifies the ordered rows. A failed run may leave the printed schema in the scratch database. [Standalone SQL](late-queue.sql) · [SQL exporter](../../reproduce.py)
