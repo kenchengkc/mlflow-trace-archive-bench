@@ -47,10 +47,14 @@ def archive_sql(layout: str = "oldest_first") -> str:
 def prepare(sql: Sql, rows: int, archived_pct: int, *, layout: str = "oldest_first", seed: int = 0) -> dict:
     sql((SQL_DIR / "schema.sql").read_text())
     sql((SQL_DIR / "seed.sql").read_text(), variables={"rows": rows})
+    return archive_fixture(sql, rows, archived_pct, layout=layout, seed=seed)
+
+
+def archive_fixture(sql: Sql, rows: int, archived_pct: int, *, layout: str, seed: int) -> dict:
     counts = json.loads(sql(archive_sql(layout), variables={
         "archived_pct": archived_pct, "batch_size": rows, "seed": seed,
     }))
-    # Start both index comparisons with up-to-date visibility maps and planner statistics.
+    # Refresh the visibility maps and planner statistics after archiving.
     sql("VACUUM (ANALYZE) trace_info;\nVACUUM (ANALYZE) trace_tags;\nVACUUM (ANALYZE) spans;")
     return counts
 

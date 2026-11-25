@@ -16,6 +16,10 @@ on:
         description: Repeat the million-trace bounded query with JIT on and off
         type: boolean
         default: false
+      driver_study:
+        description: Run the MLflow finder and raw SQL on three migrated queues
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -44,6 +48,31 @@ jobs:
           path: |
             benchmark-result.json
             matched-queues.json.gz
+          if-no-files-found: error
+  driver-study:
+    if: github.event_name == 'workflow_dispatch' && inputs.driver_study
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MLFLOW_DISABLE_AGENT_HINT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Install the pinned tracking store and database driver
+        run: |
+          python3 -m venv "$RUNNER_TEMP/driver-env"
+          "$RUNNER_TEMP/driver-env/bin/python" -m pip install -r requirements-driver.txt
+          echo "$RUNNER_TEMP/driver-env/bin" >> "$GITHUB_PATH"
+      - name: Check the migrated fixtures against the original SQL fixtures
+        run: python -m unittest -v test_driver_fixture
+      - name: Measure the three queues
+        run: python driver_study.py --output driver-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: driver-study
+          path: driver-study.json.gz
           if-no-files-found: error
   study:
     if: github.event_name == 'workflow_dispatch' && inputs.full_study

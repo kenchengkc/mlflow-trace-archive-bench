@@ -16,8 +16,8 @@ class Sql(Protocol):
 
 
 @contextmanager
-def local_postgres() -> Iterator[Sql]:
-    """Start a socket-only server and yield a function that runs psql scripts."""
+def local_database() -> Iterator[tuple[Sql, str]]:
+    """Yield a psql runner and SQLAlchemy URI for the same disposable server."""
     binaries = {}
     for name in ("initdb", "pg_ctl", "psql"):
         binary = shutil.which(name)
@@ -69,7 +69,7 @@ def local_postgres() -> Iterator[Sql]:
         try:
             run("pg_ctl", [*control, "-l", str(log_file), "-o",
                            f"-c listen_addresses= -k {tmp} -p 5432", "start"])
-            yield sql
+            yield sql, f"postgresql+psycopg2://benchmark@/postgres?host={tmp}&port=5432"
         finally:
             if (data_dir / "postmaster.pid").exists():
                 try:
@@ -77,3 +77,10 @@ def local_postgres() -> Iterator[Sql]:
                 except RuntimeError:
                     if (data_dir / "postmaster.pid").exists():
                         run("pg_ctl", [*control, "-m", "immediate", "stop"])
+
+
+@contextmanager
+def local_postgres() -> Iterator[Sql]:
+    """Start a socket-only server and yield a function that runs psql scripts."""
+    with local_database() as (sql, _):
+        yield sql
