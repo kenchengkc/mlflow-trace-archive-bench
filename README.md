@@ -4,7 +4,7 @@
 
 A reproducible PostgreSQL benchmark for the query MLflow uses to select traces for archival. It compares three ways to find the oldest eligible traces, checks that they return identical rows in identical order, and records their execution plans.
 
-An MLflow user reported waiting minutes for PostgreSQL to select three traces. MLflow added an index on timestamp and trace ID. This project tests how that index performs as the oldest traces leave the queue. The workload models the PostgreSQL backend of open-source MLflow. Databricks uses MLflow Tracing for observability in AI applications. [Original issue](https://github.com/mlflow/mlflow/issues/24895) · [Upstream fix](https://github.com/mlflow/mlflow/pull/24976) · [Databricks MLflow Tracing](https://docs.databricks.com/aws/en/mlflow3/genai/tracing/overview)
+When an MLflow user reported waiting minutes for PostgreSQL to select three traces, the maintainers added an index on timestamp and trace ID. This benchmark builds on that fix by testing what happens as the archive queue drains. MLflow contributors can use the same dataset to try a query change on a fresh queue and again after the oldest 95% of eligible traces have been archived. [Original issue](https://github.com/mlflow/mlflow/issues/24895) · [Upstream fix](https://github.com/mlflow/mlflow/pull/24976)
 
 ## Quick start
 
