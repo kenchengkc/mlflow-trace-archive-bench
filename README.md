@@ -20,21 +20,28 @@ python3 summarize.py results/strategy-study/million-late.json.gz --with-planning
 
 On PostgreSQL 16.16, each query selected **100 traces from one million synthetic traces** across eight experiments. Each figure is the median of six measurements and includes server planning and execution. The percentages refer to the share of initially eligible traces already archived, oldest first.
 
+![Median query time on a logarithmic scale. The global query was fastest on a fresh queue at 1.24 ms. With 95% archived, the bounded probe was fastest at 284.59 ms.](results/strategy-study/query-latency.png)
+
+<details>
+<summary>Exact timings and query descriptions</summary>
+
 | Query | Selection strategy | 0% archived | 95% archived |
 | --- | --- | ---: | ---: |
 | Global (MLflow) | Find the oldest eligible traces across all selected experiments. | **1.24 ms** | 1,315.50 ms |
 | Per experiment | Take up to 100 eligible traces from each experiment, then merge the results. | 4.51 ms | 1,848.73 ms |
 | Bounded probe | Check the oldest matching trace headers first. If the batch is short and more headers remain, evaluate the full eligible set. | 27.95 ms | **284.59 ms** |
 
-At 95% archived, the global query passed **853,678 trace headers** to subsequent checks to fill one batch. The bounded probe checked 200 headers, then switched to its fallback. At 0% archived, the global query filled the batch in 1.24 ms. A separate experiment traced most of the bounded probe’s first-batch overhead to PostgreSQL’s just-in-time compilation. [Query plans and compilation experiment](results/strategy-study/README.md)
+</details>
 
-The chart shows how the result changes when selecting a frequent experiment, a rare experiment, or all eight. Values below 1 mean the bounded probe was faster. [Full 100,000-trace results](results/strategy-study/matrix.md)
+At 95% archived, the global query passed **853,678 trace headers** to subsequent checks to fill one batch. The bounded probe checked 200 headers, then switched to its fallback. A separate experiment traced most of the bounded probe’s first-batch overhead to PostgreSQL’s just-in-time compilation. [Query plans and compilation experiment](results/strategy-study/README.md)
 
-![Bounded probe time divided by global query time at 100,000 traces. At 95% archived, the ratio is 0.26 across all eight experiments and 1.25 for the rare experiment.](results/strategy-study/scope-and-depth.png)
+Experiment selection changes the outcome. On 100,000 traces at 95% archived, the bounded probe used 26% of the global query’s time across all eight experiments and 125% when selecting only the rare experiment. The chart compares experiment 1 (frequent), experiment 8 (rare), and all eight at five stages of archival. [Full timing table](results/strategy-study/matrix.md)
+
+![Bounded probe time relative to global query time. A point left of 1× favors the bounded probe. At 95% archived the ratios are 0.40× for the frequent experiment, 1.25× for the rare experiment, and 0.26× across all eight.](results/strategy-study/scope-and-depth.png)
 
 ## Reproduce the benchmark
 
-On macOS or Linux, put the PostgreSQL server tools (`initdb`, `pg_ctl`, and `psql`) on your `PATH` and run the commands as a non-root user. The runner creates a temporary cluster on a private Unix socket and removes it on exit. To repeat the two workloads in the table, run the following from the checkout.
+On macOS or Linux, put the PostgreSQL server tools (`initdb`, `pg_ctl`, and `psql`) on your `PATH` and run the commands as a non-root user. The runner creates a temporary cluster on a private Unix socket and removes it on exit. To repeat the two million-trace workloads, run the following from the checkout.
 
 ```sh
 python3 study.py --rows 1000000 --scope 1,2,3,4,5,6,7,8 \

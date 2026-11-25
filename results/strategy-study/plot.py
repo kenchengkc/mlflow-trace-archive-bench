@@ -1,5 +1,4 @@
-"""Regenerate scope-and-depth.png from matrix.json.gz. Requires Matplotlib."""
-
+"""Rebuild the two README charts from the published study reports. Requires Matplotlib."""
 import gzip
 import json
 from pathlib import Path
@@ -9,82 +8,115 @@ import matplotlib
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap, LogNorm
+from matplotlib.lines import Line2D
 from matplotlib.ticker import NullLocator
 
 
 HERE = Path(__file__).resolve().parent
-DEPTHS = [0, 50, 95, 99, 100]
-SCOPES = {
-    (1,): "Experiment 1\n(frequent)",
-    (8,): "Experiment 8\n(rare)",
-    tuple(range(1, 9)): "All eight\nexperiments",
-}
+INK = "#172f40"
+MUTED = "#4f6370"
+GRID = "#dee5e8"
+FRESH = "#365d80"
+LATE = "#784d88"
+FASTER = "#086f65"
+SLOWER = "#a0441f"
+DEPTHS = (0, 50, 95, 99, 100)
+ALL = tuple(range(1, 9))
+STRATEGIES = {"global": "Global (MLflow)", "per_experiment": "Per experiment", "bounded_probe": "Bounded probe"}
 
 
-def median_time(measurement):
-    pairs = zip(measurement["planning_samples_ms"], measurement["samples_ms"], strict=True)
-    return median(planning + execution for planning, execution in pairs)
+def load_report(name):
+    with gzip.open(HERE / name, "rt", encoding="utf-8") as source:
+        return json.load(source)
 
 
-def main():
-    with gzip.open(HERE / "matrix.json.gz", "rt", encoding="utf-8") as source:
-        report = json.load(source)
-    ratios = {}
-    for case in report["cases"]:
-        if case["rows"] == 100_000 and case["batch_size"] == 100:
-            strategies = case["strategies"]
-            key = tuple(case["experiment_ids"]), case["archived_pct"]
-            ratios[key] = median_time(strategies["bounded_probe"]) / median_time(strategies["global"])
-    values = [[ratios[scope, pct] for pct in DEPTHS] for scope in SCOPES]
+def median_ms(measurement):
+    samples = zip(measurement["planning_samples_ms"], measurement["samples_ms"], strict=True)
+    return median(planning + execution for planning, execution in samples)
 
-    ink = "#192c35"
-    muted = "#475c64"
-    palette = LinearSegmentedColormap.from_list(
-        "time_ratio", ["#09506a", "#92bdca", "#f5f4ef", "#edba88", "#91400e"]
-    )
-    # Reciprocal endpoints place equal speed exactly at the midpoint of the log scale.
-    extent = max(5, max(ratios.values()), 1 / min(ratios.values()))
-    scale = LogNorm(vmin=1 / extent, vmax=extent)
 
-    fig = plt.figure(figsize=(9.4, 5.2), facecolor="white")
-    fig.text(.035, .925, "Bounded probe time relative to the global query",
-             fontsize=21, weight="bold", color=ink)
-    version = report["postgres_settings"]["server_version"].split()[0]
-    fig.text(.035, .855, f"100,000 traces   ·   Batch limit 100   ·   PostgreSQL {version}"
-             f"   ·   {report['samples_per_strategy']} samples per strategy", fontsize=12, color=muted)
+def figure(height, title, caption):
+    fig = plt.figure(figsize=(9, height), facecolor="white")
+    fig.text(.035, 1 - .22 / height, title, va="top", fontsize=20, weight="bold", color=INK)
+    fig.text(.037, 1 - .62 / height, caption, va="top", fontsize=11.5, color=MUTED)
+    return fig
 
-    ax = fig.add_axes([.215, .352, .750, .315])
-    mesh = ax.pcolormesh(values, cmap=palette, norm=scale, edgecolors="white", linewidth=2)
-    ax.invert_yaxis()
-    ax.xaxis.tick_top()
-    ax.set_xticks([i + .5 for i in range(len(DEPTHS))], labels=[f"{pct}%" for pct in DEPTHS])
-    ax.set_yticks([i + .5 for i in range(len(SCOPES))], labels=SCOPES.values())
-    ax.tick_params(length=0, labelcolor=ink, labelsize=12, pad=8)
+
+def log_axis(ax, ticks, labels):
+    ax.set_xscale("log")
+    ax.set_xticks(ticks, labels)
+    ax.xaxis.set_minor_locator(NullLocator())
     ax.spines[:].set_visible(False)
-    fig.text(.215, .748, "Share of initially eligible traces already archived", fontsize=12, color=ink)
-    for row, series in enumerate(values):
-        for col, value in enumerate(series):
-            r, g, b, _ = palette(scale(value))
-            light = .2126 * r**2.2 + .7152 * g**2.2 + .0722 * b**2.2
-            ax.text(col + .5, row + .5, f"{value:.2f}×", va="center", ha="center",
-                    fontsize=15, weight="bold", color="white" if light < .24 else ink)
+    ax.tick_params(length=0, colors=MUTED, labelsize=10, pad=7)
+    ax.set_axisbelow(True)
+    ax.grid(axis="x", color=GRID, linewidth=.8)
 
-    bar_ax = fig.add_axes([.215, .211, .750, .026])
-    bar = fig.colorbar(mesh, cax=bar_ax, orientation="horizontal")
-    bar.set_ticks([.25, .5, 1, 2, 4], labels=["0.25×", "0.5×", "1×", "2×", "4×"])
-    bar.ax.xaxis.set_minor_locator(NullLocator())
-    bar.ax.tick_params(length=3, colors=muted, labelsize=10)
-    bar.outline.set_visible(False)
-    for x, label, align in [(.215, "Bounded faster", "left"), (.59, "Equal time", "center"),
-                            (.965, "Bounded slower", "right")]:
-        fig.text(x, .26, label, ha=align, fontsize=11, color=ink)
 
-    fig.text(.035, .052, "Each cell divides the bounded-probe median by the global-query median. "
-             "Each sample includes server planning and execution.", fontsize=9.5, color=muted)
-    fig.savefig(HERE / "scope-and-depth.png", dpi=170)
+def latency_chart(start, late):
+    fig = figure(3.95, "Time to select the next 100 traces",
+                 "1 million synthetic traces  ·  All eight experiments  ·  PostgreSQL "
+                 + start["postgres_settings"]["server_version"].split()[0])
+    ax = fig.add_axes([.216, .24, .735, .435])
+    log_axis(ax, [1, 3, 10, 30, 100, 300, 1000, 3000],
+             ["1", "3", "10", "30", "100", "300", "1,000", "3,000"])
+    ax.set(xlim=(.72, 3450), ylim=(-.36, 2.65))
+    ax.set_yticks([2, 1, 0], STRATEGIES.values(), fontsize=12, color=INK)
+    ax.tick_params(axis="y", pad=15)
+    ax.set_xlabel("Median planning + execution time (ms, log scale)", fontsize=11, color=MUTED, labelpad=10)
+
+    first, last = start["cases"][0], late["cases"][0]
+    for y, key in zip([2, 1, 0], STRATEGIES):
+        a, b = (median_ms(case["strategies"][key]) for case in (first, last))
+        ax.plot([a, b], [y, y], color="#b7c6cf", lw=2.3, zorder=2)
+        for x, marker, color, face in [(a, "o", FRESH, "white"), (b, "D", LATE, LATE)]:
+            ax.plot(x, y, marker=marker, mec=color, mfc=face, ms=7, mew=1.8, zorder=3)
+            ax.annotate(f"{x:,.2f}", (x, y), xytext=(0, 8), textcoords="offset points",
+                        ha="center", va="bottom", color=color, fontsize=10.5, weight="bold")
+
+    handles = [Line2D([], [], linestyle="none", marker=marker, markeredgewidth=1.8, markersize=7,
+                      markeredgecolor=color, markerfacecolor=face, label=label)
+               for marker, color, face, label in [
+                   ("o", FRESH, "white", "Fresh queue (0% archived)"),
+                   ("D", LATE, LATE, "Late queue (95% archived)")]]
+    fig.legend(handles=handles, loc="center left", bbox_to_anchor=(.027, .72), ncol=2,
+               frameon=False, handletextpad=.2, columnspacing=1.6, labelcolor=INK, fontsize=10.5)
+    fig.savefig(HERE / "query-latency.png", dpi=180)
+    plt.close(fig)
+
+
+def scope_chart(report):
+    fig = figure(4.65, "How experiment selection changes the result",
+                 "100,000 synthetic traces  ·  Batch limit 100  ·  Bounded probe time divided by global query time")
+    cases = {(tuple(c["experiment_ids"]), c["archived_pct"]): c for c in report["cases"]
+             if c["rows"] == 100_000 and c["batch_size"] == 100}
+    scopes = [((1,), "Frequent experiment"), ((8,), "Rare experiment"), (ALL, "All eight experiments")]
+    fig.text(.036, .696, "Archived", color=MUTED, fontsize=10.5, weight="bold")
+    for i, (scope, title) in enumerate(scopes):
+        ax = fig.add_axes([.13 + i * .286, .215, .251, .445])
+        log_axis(ax, [.25, .5, 1, 2, 4], ["¼×", "½×", "1×", "2×", "4×"])
+        ax.set(xlim=(.15, 6.6), ylim=(4.55, -.55))
+        ax.set_title(title, fontsize=12, loc="center", color=INK, weight="bold", pad=12)
+        ax.set_yticks(range(len(DEPTHS)))
+        ax.tick_params(axis="y", labelleft=False)
+        ax.axvline(1, color="#6d8088", lw=1.15, zorder=2)
+        for y, pct in enumerate(DEPTHS):
+            values = cases[scope, pct]["strategies"]
+            ratio = median_ms(values["bounded_probe"]) / median_ms(values["global"])
+            color = FASTER if ratio <= 1 else SLOWER
+            ax.hlines(y, 1, ratio, color=color, lw=2.0, zorder=2)
+            ax.plot(ratio, y, marker="o", mfc=color, mec="white", mew=.8, ms=7, zorder=3)
+            offset, align = (-6, "right") if ratio <= 1 else (6, "left")
+            ax.annotate(f"{ratio:.2f}×", (ratio, y), xytext=(offset, 0), textcoords="offset points",
+                        va="center", ha=align, fontsize=10, color=color, weight="bold")
+            if i == 0:
+                ax.text(-.12, y, f"{pct}%", transform=ax.get_yaxis_transform(), ha="right",
+                        va="center", color=INK, fontsize=11.5)
+    fig.text(.5, .065, "Relative median time (log scale)  ·  Below 1× favors the bounded probe",
+             ha="center", fontsize=11, color=MUTED)
+    fig.savefig(HERE / "scope-and-depth.png", dpi=180)
     plt.close(fig)
 
 
 if __name__ == "__main__":
-    main()
+    latency_chart(load_report("million-start.json.gz"), load_report("million-late.json.gz"))
+    scope_chart(load_report("matrix.json.gz"))
