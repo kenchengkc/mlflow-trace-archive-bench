@@ -1,5 +1,5 @@
--- The runner prepares pg_temp.archive_prefix from the oldest initially eligible
--- candidates for this fresh fixture. Rows include request_id and experiment_id.
+-- pg_temp.archive_prefix contains the initially eligible traces selected for
+-- archival by this fixture, with their request_id and experiment_id.
 -- Simulate the committed database state, without uploading artifacts.
 -- https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/mlflow/store/tracking/sqlalchemy_store.py
 BEGIN;

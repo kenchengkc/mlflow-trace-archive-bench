@@ -36,10 +36,14 @@ jobs:
           python3 summarize.py smoke.json.gz --with-planning --buffers
       - name: Run the original index comparison
         run: python3 benchmark.py --output benchmark-result.json
+      - name: Compare two matched 95%-archived queues
+        run: python3 matched_queues.py --output matched-queues.json.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: postgres16-results
-          path: benchmark-result.json
+          path: |
+            benchmark-result.json
+            matched-queues.json.gz
           if-no-files-found: error
   study:
     if: github.event_name == 'workflow_dispatch' && inputs.full_study

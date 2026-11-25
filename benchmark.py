@@ -27,23 +27,29 @@ QUERY = scoped_query("candidates.sql", ALL_EXPERIMENTS)
 EXPLAIN = "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) " + QUERY
 
 
-def archive_sql() -> str:
-    # Stage the exact population before simulating an oldest-first archive pass.
+def archive_sql(layout: str = "oldest_first") -> str:
+    if layout not in ("oldest_first", "scattered"):
+        raise ValueError(f"unknown archive layout: {layout}")
+    # The scattered layout takes its per-group quotas from the same oldest-first IDs.
+    prefix_table = "archive_prefix" if layout == "oldest_first" else "oldest_prefix"
+    scatter = (SQL_DIR / "scatter_archive.sql").read_text() if layout == "scattered" else ""
     return f"""
         CREATE TEMP TABLE eligible AS {QUERY};
-        CREATE TEMP TABLE archive_prefix AS
+        CREATE TEMP TABLE {prefix_table} AS
             SELECT * FROM eligible ORDER BY timestamp_ms, request_id
             LIMIT (SELECT count(*) * :archived_pct / 100 FROM eligible);
-        {(SQL_DIR / 'set_archived.sql').read_text()}
+        {scatter}{(SQL_DIR / 'set_archived.sql').read_text()}
         SELECT json_build_object('eligible_before', (SELECT count(*) FROM eligible),
                                  'archived', (SELECT count(*) FROM archive_prefix));
     """
 
 
-def prepare(sql: Sql, rows: int, archived_pct: int) -> dict:
+def prepare(sql: Sql, rows: int, archived_pct: int, *, layout: str = "oldest_first", seed: int = 0) -> dict:
     sql((SQL_DIR / "schema.sql").read_text())
     sql((SQL_DIR / "seed.sql").read_text(), variables={"rows": rows})
-    counts = json.loads(sql(archive_sql(), variables={"archived_pct": archived_pct, "batch_size": rows}))
+    counts = json.loads(sql(archive_sql(layout), variables={
+        "archived_pct": archived_pct, "batch_size": rows, "seed": seed,
+    }))
     # Start both index comparisons with up-to-date visibility maps and planner statistics.
     sql("VACUUM (ANALYZE) trace_info;\nVACUUM (ANALYZE) trace_tags;\nVACUUM (ANALYZE) spans;")
     return counts

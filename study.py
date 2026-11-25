@@ -48,9 +48,12 @@ def measured_rounds(sql: Sql, explain: dict[str, str], values: dict[str, int], s
     return {name: summarize_plans(group) for name, group in plans.items()}
 
 
-def compare(sql: Sql, queries: dict[str, str], batch_size: int, expected_count: int, samples: int) -> dict:
+def compare(sql: Sql, queries: dict[str, str], batch_size: int, expected_count: int, samples: int,
+            *, expected_rows: str | None = None) -> dict:
     values = {"batch_size": batch_size}
     expected = sql(queries["global"], variables=values)
+    if expected_rows is not None and expected != expected_rows:
+        raise RuntimeError("Global query returned different ordered rows than the fixture oracle")
     returned = len(expected.splitlines())
     if returned != expected_count:
         raise RuntimeError(f"Expected {expected_count} candidates, got {returned}")
