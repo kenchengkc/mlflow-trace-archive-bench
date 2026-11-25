@@ -1,60 +1,42 @@
 # MLflow trace archival benchmark
 
-How much work does PostgreSQL do to find the next 100 traces to archive? This benchmark runs MLflow’s candidate-selection query on synthetic tracking data. It compares the same rows before and after adding the index on `(timestamp_ms, request_id)` that MLflow shipped in August 2026.
+MLflow periodically asks its tracking database for the oldest completed traces ready to archive. An operator reported that PostgreSQL took minutes to choose just three. MLflow shipped an index on timestamp and trace ID. This project tests what happens when the oldest traces have already been archived and the database must look farther to fill a batch. [Operator report](https://github.com/mlflow/mlflow/issues/24895) · [Shipped fix](https://github.com/mlflow/mlflow/pull/24976)
 
-An MLflow operator reported that asking PostgreSQL 16 for just three traces could take minutes. The operator showed that a new index removed a blocking sort. The merged fix included SQLite timings. This project makes the PostgreSQL comparison repeatable and tests how it changes as the oldest traces leave the queue. [Operator report](https://github.com/mlflow/mlflow/issues/24895) · [Merged index and SQLite benchmark](https://github.com/mlflow/mlflow/pull/24976)
+## What we found
 
-## Why this matters to Databricks engineers
+On **one million synthetic traces**, a query that checks a short prefix of the queue and falls back to filtering the full set was **4.62× faster at 95% archived**. The shipped query was **22.5× faster at 0% archived**. Each query returned the same 100 traces in the same order.
 
-MLflow Tracing records what happens during an AI request, including individual model and tool calls. Databricks uses those traces for debugging, evaluation, and monitoring. The open-source MLflow tracking server supports a PostgreSQL backend. Its archival worker needs to find completed traces whose span data can move out of the tracking database. A slow selection query can delay each pass before the worker moves its first trace. The measurements here apply to that open-source SQL path. Databricks also offers managed trace storage in Unity Catalog. [Databricks tracing overview](https://docs.databricks.com/aws/en/mlflow3/genai/tracing/overview) · [MLflow candidate selection](https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/mlflow/store/tracking/sqlalchemy_store.py)
+| Oldest eligible traces already archived | Shipped global query | Per-experiment merge | Bounded probe |
+| ---: | ---: | ---: | ---: |
+| 0% | **1.24 ms** | 4.51 ms | 27.95 ms |
+| 95% | 1,315.50 ms | 1,848.73 ms | **284.59 ms** |
 
-## Compare query strategies
+Each number is the median of six paired planning-plus-execution timings on PostgreSQL 16.16. All three queries used the shipped indexes. The 47-case study covers different batch sizes, frequent and rare experiments, timestamp ties in the data, and exhausted queues. [Results, plans, and limitations](results/strategy-study/) · [All 45 cases at 100,000 traces](results/strategy-study/matrix.md)
 
-The strategy study measures the shipped global query, a per-experiment merge, and a query that tests a bounded prefix of the queue. All three must return the same ordered rows on the same database. A default run compares a rare experiment with all eight experiments, both before archival and after the oldest 95% of eligible traces have moved.
+![Time for the bounded probe divided by time for the global query. At 95% archived the bounded probe was faster across all experiments and slower for the rare experiment.](results/strategy-study/scope-and-depth.png)
+
+A follow-up isolated why the first batch was slow. PostgreSQL compiled part of the query even though the fallback never ran. Alternating just-in-time compilation on and off reduced that batch from **26.04 ms to 1.65 ms** with compilation off. [Controlled comparison](results/strategy-study/#why-the-first-batch-was-slow)
+
+## Reproduce it
+
+**With PostgreSQL tools installed**, run these commands from the checkout as a regular OS user. Python 3.10+ uses only the standard library. The runner creates and removes its own database on a private socket. Put `initdb`, `pg_ctl`, and `psql` on your path.
 
 ```sh
+python3 -m unittest -v
 python3 study.py --output study-result.json.gz
 python3 summarize.py study-result.json.gz --with-planning --buffers
 ```
 
-## PostgreSQL 16 result
-
-Median time to select the next **100 traces** from 100,000 synthetic traces on a four-CPU Ubuntu runner with PostgreSQL 16.16. Each cell represents seven warm executions.
-
-| Oldest eligible traces already archived | Without the archival index | With the archival index |
-| ---: | ---: | ---: |
-| 0% | 20.79 ms | 2.00 ms |
-| 50% | 76.03 ms | 59.99 ms |
-| 95% | 36.08 ms | 114.21 ms |
-
-At 0% archived, the index scan returned 129 rows to the downstream filters to find 100 candidates. At 95%, it returned 85,489 to find the same batch size. The ordered index lets the database stop early when it finds eligible rows quickly. As the archived prefix grows, it can walk past thousands of old entries to fill one batch. That makes late archival passes worth testing separately. [PostgreSQL 16 timings and query plans](results/postgresql-16-linux.json) · [GitHub Actions run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45566898505)
-
-A second run on PostgreSQL 14.19 on macOS arm64 showed the same change in direction. With 95% archived, its median times were 18.54 ms without the archival index and 63.31 ms with it. [PostgreSQL 14 timings and query plans](results/postgresql-14-macos.json)
-
-## Run it
-
-Use Python 3.10+ and PostgreSQL server tools (`initdb`, `pg_ctl`, `psql`) on macOS or Linux, as a regular OS user. Python uses only the standard library. Each case starts a disposable database that listens on a private Unix socket and is removed on exit.
+**With an existing scratch PostgreSQL database**, the checked-in SQL file creates a 100,000-trace fixture, prints three query plans, verifies the ordered results, and removes its schema on success. This route needs only `psql` and permission to create a schema. [Download the standalone SQL](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/late-queue.sql)
 
 ```sh
-git clone https://github.com/kenchengkc/mlflow-trace-archive-bench.git
-cd mlflow-trace-archive-bench
-python3 -m unittest -v
-python3 benchmark.py --output benchmark-result.json
+psql -X -d scratch -f results/strategy-study/late-queue.sql
 ```
 
-To replay the operator’s three-candidate batch size on a smaller fixture, run `python3 benchmark.py --rows 10000 --archived-pct 0 95 --batch-size 3`. On Debian or Ubuntu, versioned server binaries may need to be added to `PATH` (for example, `/usr/lib/postgresql/16/bin`).
+To export a different workload, run `python3 reproduce.py --help`. To repeat the original comparison with and without MLflow’s archival index, run `python3 benchmark.py`. [Original PostgreSQL 16 measurements](results/postgresql-16-linux.json)
 
-## What the benchmark measures
+## Connection to Databricks
 
-- **Workload.** The default run seeds 10,000 and 100,000 traces. It finds the eligible population, then simulates archiving the oldest 0%, 50%, and 95% of that population. Archiving clears the span payloads and writes MLflow’s two location tags. For example, at 100,000 traces, 72,386 qualify initially and 68,766 of those have been archived in the 95% case.
-- **Query.** For one eight-experiment batch, PostgreSQL must return the oldest qualifying rows, breaking timestamp ties by trace ID. The fixture includes in-progress traces, failed archival attempts, excluded experiments, and missing or empty spans. Both variants retain the preexisting experiment-and-timestamp index. The database planner chooses the access path. [Query](sql/candidates.sql) · [Schema](sql/schema.sql)
-- **Timing.** Both variants run on the same seeded cluster for each case. The runner refreshes planner statistics, retrieves the ordered rows, runs one warm-up plan and records seven server execution times with `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)`. The JSON includes every timing, the plan closest to the median, PostgreSQL settings, index size, and a digest of the ordered result. Index build time and artifact uploads fall outside the timed interval. [PostgreSQL EXPLAIN](https://www.postgresql.org/docs/16/sql-explain.html)
-- **Correctness.** Every comparison requires identical rows in identical order and the expected row count. A separate hand-authored fixture checks exact IDs, including a tied timestamp and a trace at the inclusive retention cutoff. CI runs the tests and publishes the raw benchmark JSON on PostgreSQL 16. [Eligibility test](test_candidates.py) · [CI runs](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/workflows/postgres.yml)
+Databricks uses MLflow Tracing to record individual model and tool calls for debugging, evaluation, and monitoring. This repository measures candidate selection in the open-source MLflow PostgreSQL tracking store. Its contribution is a repeatable database workload, a tested alternative, and concrete cases where that alternative regresses. Databricks also supports storing traces in Unity Catalog. [Databricks tracing overview](https://docs.databricks.com/aws/en/mlflow3/genai/tracing/overview) · [Upstream candidate query](https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/mlflow/store/tracking/sqlalchemy_store.py) · [Contribution plan](ROADMAP.md)
 
-## Contribution plan
-
-The first result to investigate is the cost of walking past already-archived traces to reach a small batch. The next experiment varies how many experiments share the queue. A useful upstream deliverable would be a small benchmark or a query change backed by the same correctness fixtures, raw plans, and an explicit account of when it helps. [Milestones and acceptance criteria](ROADMAP.md)
-
-## License
-
-Copyright 2026 Ken Cheng. Distributed under Apache License 2.0, the license used by MLflow. The SQL fixture models the selection logic in MLflow revision `3128eb4`. This is an independent community project. [Project license](LICENSE) · [Upstream license](https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/LICENSE.txt)
+Copyright 2026 Ken Cheng. Independent project, licensed under Apache License 2.0. [License](LICENSE)

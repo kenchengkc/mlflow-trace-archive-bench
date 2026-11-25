@@ -76,6 +76,15 @@ class StrategyTest(unittest.TestCase):
                    INSERT INTO spans VALUES ('c','s','{}'), ('e','s','{}'), ('f','s','{}');""")
             self.check_strategies(sql, (1,), 2, ["c|1|1000", "e|1|1000"])
 
+    def test_batch_larger_than_probe_cap(self):
+        with local_postgres() as sql:
+            sql((SQL_DIR / "schema.sql").read_text())
+            sql("""INSERT INTO trace_info SELECT 't' || i, 1, i, 'OK'
+                   FROM generate_series(1, 4102) AS i;
+                   INSERT INTO spans SELECT request_id, 'root', '{}' FROM trace_info;""")
+            expected = [f"t{i}|1|{i}" for i in range(1, 4101)]
+            self.check_strategies(sql, (1,), 4100, expected)
+
     def test_skewed_workload_with_a_long_empty_prefix(self):
         with local_postgres() as sql:
             sql((SQL_DIR / "schema.sql").read_text())
