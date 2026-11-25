@@ -99,6 +99,18 @@ def summary(report: dict, buffers: bool, with_planning: bool = False) -> str:
 
     lines.extend(["", "† marks a gap within 5% of the lowest median, overlapping observed timing "
                   "ranges, or fewer than two samples for a comparison. Equal medians share the label."])
+    controls = [case for case in cases if "bounded_probe_jit" in case]
+    if controls:
+        lines.extend(["", "Bounded query with just-in-time compilation (JIT) enabled and disabled.",
+                      "", "| Experiment IDs | Trace rows | Batch | Archived | JIT on (ms) | JIT off (ms) |",
+                      "| --- | ---: | ---: | ---: | ---: | ---: |"])
+        for case in sorted(controls, key=sort_key):
+            modes = case["bounded_probe_jit"]
+            if with_planning:
+                modes = {name: include_planning(value) for name, value in modes.items()}
+            lines.append(f"| {experiment_label(case['experiment_ids'])} | {case['rows']:,} | "
+                         f"{case['batch_size']} | {case['archived_pct']}% | "
+                         f"{modes['on']['median_ms']:.3f} | {modes['off']['median_ms']:.3f} |")
     return "\n".join(lines)
 
 

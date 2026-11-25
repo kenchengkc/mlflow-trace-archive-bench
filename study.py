@@ -33,30 +33,49 @@ def parse_scope(value: str) -> tuple[int, ...]:
     return tuple(ids)
 
 
+EXPLAIN_PREFIX = "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) "
+
+
+def measured_rounds(sql: Sql, explain: dict[str, str], values: dict[str, int], samples: int) -> dict:
+    plans = {name: [] for name in explain}
+    for statement in explain.values():
+        sql(statement, variables=values)
+    # Six orders balance three strategies; two orders balance the optional JIT control.
+    orders = list(permutations(explain))
+    for sample in range(samples):
+        for name in orders[sample % len(orders)]:
+            plans[name].append(json.loads(sql(explain[name], variables=values))[0])
+    return {name: summarize_plans(group) for name, group in plans.items()}
+
+
 def compare(sql: Sql, queries: dict[str, str], batch_size: int, expected_count: int, samples: int) -> dict:
     values = {"batch_size": batch_size}
     expected = sql(queries["global"], variables=values)
     returned = len(expected.splitlines())
     if returned != expected_count:
         raise RuntimeError(f"Expected {expected_count} candidates, got {returned}")
-    plans = {name: [] for name in queries}
-    explain = {name: "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) " + query
-               for name, query in queries.items()}
     for name, query in queries.items():
         if name != "global" and sql(query, variables=values) != expected:
             raise RuntimeError(f"{name} returned different ordered rows than the global query")
-        sql(explain[name], variables=values)  # Exclude the first instrumented execution.
-
-    # A full cycle places each strategy first, middle and last twice on this fixture.
-    orders = list(permutations(queries))
-    for sample in range(samples):
-        for name in orders[sample % len(orders)]:
-            plans[name].append(json.loads(sql(explain[name], variables=values))[0])
+    explain = {name: EXPLAIN_PREFIX + query for name, query in queries.items()}
     return {
         "batch_size": batch_size, "returned": returned,
         "result_sha256": hashlib.sha256(expected.encode()).hexdigest(),
-        "strategies": {name: summarize_plans(group) for name, group in plans.items()},
+        "strategies": measured_rounds(sql, explain, values, samples),
     }
+
+
+def compare_jit(sql: Sql, query: str, batch: int, samples: int, digest: str) -> dict:
+    values = {"batch_size": batch}
+    explain = {}
+    for mode in ("on", "off"):
+        # Each call has a fresh session. Apply the setting in that same session.
+        setting = f"SET jit = {mode};\n"
+        rows = sql(setting + query, variables=values)
+        if hashlib.sha256(rows.encode()).hexdigest() != digest:
+            raise RuntimeError(f"Bounded query returned different rows with jit={mode}")
+        explain[mode] = setting + EXPLAIN_PREFIX + query
+    return measured_rounds(sql, explain, values, samples)
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -87,6 +106,10 @@ def run(args: argparse.Namespace) -> dict:
                 eligible = sum(remaining.get(i, 0) for i in ids)
                 for batch in args.batch_size:
                     case = compare(sql, queries, batch, min(batch, eligible), args.samples)
+                    if args.jit_control:
+                        case["bounded_probe_jit"] = compare_jit(
+                            sql, queries["bounded_probe"], batch, args.samples, case["result_sha256"]
+                        )
                     case.update(rows=args.rows, archived_pct=pct, experiment_ids=ids,
                                 eligible_remaining_in_scope=eligible, **counts)
                     report["cases"].append(case)
@@ -106,6 +129,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=positive_int, nargs="+", default=[100])
     parser.add_argument("--samples", type=positive_int, default=6,
                         help="measured executions per strategy; multiples of six balance all execution orders")
+    parser.add_argument("--jit-control", action="store_true",
+                        help="also alternate the bounded query with PostgreSQL JIT enabled and disabled")
     parser.add_argument("--output", type=Path, help="save timings and query plans as .json or .json.gz")
     args = parser.parse_args()
     if any(pct < 0 or pct > 100 for pct in args.archived_pct):

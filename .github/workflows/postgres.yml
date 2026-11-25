@@ -12,6 +12,10 @@ on:
         description: Run the 100k workload matrix and million-trace checks
         type: boolean
         default: false
+      jit_control:
+        description: Repeat the million-trace bounded query with JIT on and off
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -28,7 +32,7 @@ jobs:
         run: python3 -m unittest -v
       - name: Check the strategy runner and report
         run: |
-          python3 study.py --rows 512 --archived-pct 0 100 --batch-size 3 --samples 1 --output smoke.json.gz
+          python3 study.py --rows 512 --archived-pct 0 100 --batch-size 3 --samples 2 --jit-control --output smoke.json.gz
           python3 summarize.py smoke.json.gz --with-planning --buffers
       - name: Run the original index comparison
         run: python3 benchmark.py --output benchmark-result.json
@@ -63,4 +67,23 @@ jobs:
         with:
           name: study-${{ matrix.name }}
           path: ${{ matrix.name }}.json.gz
+          if-no-files-found: error
+  jit-control:
+    if: github.event_name == 'workflow_dispatch' && inputs.jit_control
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Alternate JIT on and off on the same fixture
+        run: >
+          python3 study.py --rows 1000000 --archived-pct 0 95 --scope 1,2,3,4,5,6,7,8
+          --batch-size 100 --samples 6 --jit-control --output million-jit.json.gz
+      - run: python3 summarize.py million-jit.json.gz --with-planning >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: study-million-jit
+          path: million-jit.json.gz
           if-no-files-found: error

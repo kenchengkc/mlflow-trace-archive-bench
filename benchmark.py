@@ -27,11 +27,9 @@ QUERY = scoped_query("candidates.sql", ALL_EXPERIMENTS)
 EXPLAIN = "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) " + QUERY
 
 
-def prepare(sql: Sql, rows: int, archived_pct: int) -> dict:
-    sql((SQL_DIR / "schema.sql").read_text())
-    sql((SQL_DIR / "seed.sql").read_text(), variables={"rows": rows})
+def archive_sql() -> str:
     # Stage the exact population before simulating an oldest-first archive pass.
-    archive = f"""
+    return f"""
         CREATE TEMP TABLE eligible AS {QUERY};
         CREATE TEMP TABLE archive_prefix AS
             SELECT * FROM eligible ORDER BY timestamp_ms, request_id
@@ -40,7 +38,12 @@ def prepare(sql: Sql, rows: int, archived_pct: int) -> dict:
         SELECT json_build_object('eligible_before', (SELECT count(*) FROM eligible),
                                  'archived', (SELECT count(*) FROM archive_prefix));
     """
-    counts = json.loads(sql(archive, variables={"archived_pct": archived_pct, "batch_size": rows}))
+
+
+def prepare(sql: Sql, rows: int, archived_pct: int) -> dict:
+    sql((SQL_DIR / "schema.sql").read_text())
+    sql((SQL_DIR / "seed.sql").read_text(), variables={"rows": rows})
+    counts = json.loads(sql(archive_sql(), variables={"archived_pct": archived_pct, "batch_size": rows}))
     # Start both index comparisons with up-to-date visibility maps and planner statistics.
     sql("VACUUM (ANALYZE) trace_info;\nVACUUM (ANALYZE) trace_tags;\nVACUUM (ANALYZE) spans;")
     return counts
@@ -68,7 +71,7 @@ def summarize_plans(plans: list[dict]) -> dict:
 def postgres_settings(sql: Sql) -> dict:
     return json.loads(sql("""SELECT json_object_agg(name, current_setting(name))
             FROM pg_settings WHERE name IN ('server_version', 'shared_buffers', 'work_mem',
-                'max_parallel_workers_per_gather', 'random_page_cost', 'jit', 'block_size');"""))
+                'max_parallel_workers_per_gather', 'random_page_cost', 'jit', 'jit_above_cost', 'block_size');"""))
 
 
 def run_case(rows: int, archived_pct: int, batch_size: int, samples: int, indexed_first: bool):
