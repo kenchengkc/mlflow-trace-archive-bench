@@ -6,11 +6,7 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 ## 1. Same archive percentage, different queue
 
-**Question.** How much does the position of the remaining traces change the cost of selecting a batch?
-
-Start with 100,000 traces, eight experiments and a batch of 100. In one fixture, archive the oldest 95% of initially eligible traces, as today. In a second, spread the same number of archived traces through time with a fixed seed. Use identical trace headers and match archived counts by experiment and span count. Check every strategy against independently calculated ordered results for its own fixture.
-
-Publish one command that produces both fixtures and a table showing the position of the 100th eligible trace among matching headers, the scan PostgreSQL chose, its buffer accesses and median latency. If the query stops using an ordered scan, preserve that plan too. This pair lets a maintainer distinguish a long run of already archived traces from a high archive percentage alone. [Existing fixture](sql/seed.sql) · [Current comparison](results/strategy-study/matrix.md)
+**Completed.** The 100,000-trace comparison matched archived counts by experiment and span count. Both layouts left 3,620 eligible traces. Scattering the archived traces moved the 100th eligible trace from header 85,489 to header 2,422 and made the global query the fastest of the three on PostgreSQL 16.16. Run `python3 matched_queues.py` to rebuild both queues and check the ordered results. [Matched-queue findings](README.md#two-queues-with-95-archived) · [Saved plans](results/strategy-study/matched-queues.json.gz)
 
 ## 2. Reproduce the result through MLflow
 

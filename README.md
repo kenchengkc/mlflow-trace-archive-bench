@@ -32,6 +32,19 @@ Each cell gives the median followed by the minimum and maximum of six measured r
 
 At 95% archived, the global query passed 853,678 trace headers to its eligibility checks. The bounded probe checked 200 headers, then switched to filtering the full set. On the fresh queue, PostgreSQL’s just-in-time compilation accounted for most of the probe’s overhead. [Execution plans and controlled experiment](results/strategy-study/README.md#why-the-first-batch-was-slow)
 
+### Two queues with 95% archived
+
+**Changing which traces were archived flipped the fastest query.** Both fixtures started with identical headers for 100,000 traces. Of 72,386 initially eligible traces in the eight selected experiments, each fixture archived 68,766 and left 3,620. One archived the oldest traces first. The other used a fixed seed to scatter archival through time, matching the archived counts for each experiment and span count.
+
+| Archive layout | Position of 100th eligible trace | Global (ms) | Per experiment (ms) | Bounded probe (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Oldest first | 85,489 | 142.10 | 154.00 | **36.27** |
+| Scattered | 2,422 | **5.26** | 42.07 | 37.23 |
+
+Both global queries used the same timestamp and trace-ID index. The oldest-first scan passed **35× as many headers** matching the experiments, cutoff and status to the eligibility checks. The global plan recorded 369,267 shared-buffer accesses on that queue and 11,062 on the scattered queue. The bounded probe found zero and seven eligible traces, respectively, in its first 200 headers, so it ran the full fallback in both layouts.
+
+Times are medians of six warm PostgreSQL 16.16 runs per query and include database planning and execution. Buffer counts come from one representative plan per layout and include repeated accesses. All three queries returned the independently verified ordered batch for each fixture. [Raw samples and plans](results/strategy-study/matched-queues.json.gz) · [PostgreSQL run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45667039308)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -54,7 +67,15 @@ Values below 1× favor the bounded probe. [Full timing table](results/strategy-s
 
 ## Reproduce the benchmark
 
-On macOS or Linux, put the PostgreSQL server tools (`initdb`, `pg_ctl`, and `psql`) on your `PATH` and run the commands as a non-root user. The runner creates a temporary cluster on a private Unix socket and removes it on exit. To repeat the two million-trace workloads, run the following from the checkout.
+On macOS or Linux, put the PostgreSQL server tools (`initdb`, `pg_ctl`, and `psql`) on your `PATH` and run the commands as a non-root user. The runner creates a temporary cluster on a private Unix socket and removes it on exit. To build both matched queues and print the comparison, run the following from the checkout.
+
+```sh
+python3 matched_queues.py --output matched-queues.json.gz
+```
+
+To inspect the published comparison with Python alone, run `python3 summarize.py results/strategy-study/matched-queues.json.gz --with-planning --buffers`.
+
+The million-trace study uses the following commands.
 
 ```sh
 python3 study.py --rows 1000000 --scope 1,2,3,4,5,6,7,8 \
