@@ -1,7 +1,11 @@
+import gzip
+import json
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+
+from summarize import summary
 
 
 ROOT = Path(__file__).resolve().parent
@@ -20,6 +24,16 @@ class ReportFiltersTest(unittest.TestCase):
         result = summarize("matrix.json.gz", "--with-planning")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, (REPORTS / "matrix.md").read_bytes())
+
+    def test_layouts_distinguish_otherwise_identical_cases(self):
+        with gzip.open(REPORTS / "million-jit.json.gz", "rt") as source:
+            report = json.load(source)
+        original = report["cases"][0]
+        report["cases"] = [dict(original, layout="oldest_first"), dict(original, layout="scattered"), original]
+        lines = summary(report, buffers=False, archived_pct=original["archived_pct"]).splitlines()
+        for label in ("Layout", "Oldest first", "Scattered", "—"):
+            # Both the main and JIT tables identify the layout.
+            self.assertEqual(sum(line.startswith(f"| {label} |") for line in lines), 2)
 
     def test_exact_scope_and_combined_filters(self):
         for scope, label in (("8", "8"), ("8, 6,1,2,3,4,5,7,1", "1–8")):

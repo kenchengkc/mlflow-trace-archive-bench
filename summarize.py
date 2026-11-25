@@ -90,8 +90,15 @@ def summary(report: dict, buffers: bool, with_planning: bool = False, *,
         )
     columns = ["Experiment IDs", "Trace rows", "Batch", "Archived", "Returned",
                *STRATEGIES.values(), "Lowest median"]
-    lines.extend(["", "| " + " | ".join(columns) + " |",
-                  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"])
+    show_layout = any("layout" in case for case in cases)
+    layout_heading = " Layout |" if show_layout else ""
+    layout_rule = " --- |" if show_layout else ""
+    lines.extend(["", f"|{layout_heading} " + " | ".join(columns) + " |",
+                  f"|{layout_rule} --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"])
+
+    def layout_cell(case):
+        label = case.get("layout", "—").replace("_", " ").capitalize()
+        return f" {label} |" if show_layout else ""
 
     def sort_key(case):
         ids = case["experiment_ids"]
@@ -115,20 +122,20 @@ def summary(report: dict, buffers: bool, with_planning: bool = False, *,
                 cell += f" / {accesses:,}"
             cells.append(cell)
         cells.append(fastest_label(measurements))
-        lines.append("| " + " | ".join(cells) + " |")
+        lines.append(f"|{layout_cell(case)} " + " | ".join(cells) + " |")
 
     lines.extend(["", "† marks a gap within 5% of the lowest median, overlapping observed timing "
                   "ranges, or fewer than two samples for a comparison. Equal medians share the label."])
     controls = [case for case in cases if "bounded_probe_jit" in case]
     if controls:
         lines.extend(["", "Bounded query with just-in-time compilation (JIT) enabled and disabled.",
-                      "", "| Experiment IDs | Trace rows | Batch | Archived | JIT on (ms) | JIT off (ms) |",
-                      "| --- | ---: | ---: | ---: | ---: | ---: |"])
+                      "", f"|{layout_heading} Experiment IDs | Trace rows | Batch | Archived | JIT on (ms) | JIT off (ms) |",
+                      f"|{layout_rule} --- | ---: | ---: | ---: | ---: | ---: |"])
         for case in sorted(controls, key=sort_key):
             modes = case["bounded_probe_jit"]
             if with_planning:
                 modes = {name: include_planning(value) for name, value in modes.items()}
-            lines.append(f"| {experiment_label(case['experiment_ids'])} | {case['rows']:,} | "
+            lines.append(f"|{layout_cell(case)} {experiment_label(case['experiment_ids'])} | {case['rows']:,} | "
                          f"{case['batch_size']} | {case['archived_pct']}% | "
                          f"{modes['on']['median_ms']:.3f} | {modes['off']['median_ms']:.3f} |")
     return "\n".join(lines)
