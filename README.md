@@ -2,7 +2,7 @@
 
 [![PostgreSQL benchmark CI](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/workflows/postgres.yml/badge.svg?branch=main)](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/workflows/postgres.yml)
 
-A PostgreSQL benchmark for the query MLflow uses to choose its next batch of traces to archive. It compares three SQL strategies and checks that each returns the same traces in the same order.
+A PostgreSQL benchmark for the query MLflow uses to choose its next batch of traces to archive. It compares MLflow’s finder with alternative queries and checks that each returns the same traces in the same order.
 
 MLflow added an index on timestamp and trace ID after a user reported waiting minutes to select three traces. This project builds on that fix by measuring what happens as the oldest traces leave the queue. [Operator report](https://github.com/mlflow/mlflow/issues/24895) · [Upstream fix](https://github.com/mlflow/mlflow/pull/24976)
 
@@ -59,6 +59,22 @@ The raw column runs this repository’s global query directly. The replay runs t
 
 The earlier reduced-schema study measured server planning and execution alone. Its fresh-queue plan scanned 30,882 tag rows looking for a span-location tag. MLflow’s migration puts the tag key first in the primary index, while the reduced fixture puts the trace ID first. Both migrated plans used that index for the lookup and found zero matching tags. [Earlier plan](results/strategy-study/matrix.json.gz) · [MLflow migration](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/db_migrations/versions/867495a8f9d4_add_trace_tables.py#L57) · [Reduced schema](sql/schema.sql)
 
+### Deferring the fallback
+
+For a batch of 100, the two-step selector checks up to 200 of the oldest matching headers. If it fills the batch or finds fewer than 200 headers, it returns the eligible traces in order. Otherwise, it sends a second query that recomputes the entire batch. Both reads share a short, read-only, repeatable-read transaction. [Selector](two_step.py) · [Prefix query](sql/two_step_prefix.sql) · [Fallback query](sql/two_step_fallback.sql)
+
+| Queue, 100,000 traces | MLflow finder (ms) | Single-statement probe (ms) | Two-step (ms) | Two-step fallback calls |
+| --- | ---: | ---: | ---: | ---: |
+| Fresh | 1.84 | 1.49 | **1.15** | 0/12 |
+| 95% archived, oldest first | 112.71 | 28.46 | 28.96 | 12/12 |
+| 95% archived, scattered | **5.36** | 27.72 | 27.41 | 12/12 |
+
+Times are medians of 12 complete selection transactions per method, including checkout, isolation setup and commit on the same warm connection per queue. Every call returned the independently verified ordered batch. The two probes’ timing ranges overlapped within each archived layout. With archival scattered, two-step selection took **5.1× as long as MLflow’s finder**. For the rare experiment alone, all three medians were within 0.5 ms of one another on both archived queues. [Samples and plans](results/two-step.json.gz) · [Rare experiment](results/two-step-rare.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45672585264)
+
+The largest fresh-queue difference appeared at **one million traces**. The single-statement probe took **14.79 ms** and its plan showed 67 just-in-time compilation functions, even though the fallback executed zero times. The two-step selector sent only the prefix query, whose plan showed no compilation, and took **1.40 ms**. MLflow’s finder took **2.10 ms**. [Million-trace samples and plans](results/two-step-million-fresh.json.gz)
+
+To verify the order under concurrent writes, a test commits two changes on a second PostgreSQL connection between the probe and fallback. An older trace becomes eligible and a tied candidate is archived. The fallback returns the exact pre-commit batch, including both tied IDs in order. A new transaction sees both changes and agrees with MLflow’s finder. [Concurrency test](test_two_step.py)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -95,6 +111,13 @@ To repeat the driver comparison, install the pinned MLflow release and driver in
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-driver.txt
 .venv/bin/python driver_study.py --output driver-study.json.gz
+```
+
+With the same environment, run the concurrency checks and compare the three selectors on each queue. Add `--scope 8` to time the rare experiment or `--rows 1000000 --fresh-only` to reproduce the compilation case.
+
+```sh
+.venv/bin/python -m unittest -v test_two_step
+.venv/bin/python two_step_study.py --output two-step.json.gz
 ```
 
 The million-trace study uses the following commands.

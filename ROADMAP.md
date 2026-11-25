@@ -14,11 +14,7 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 ## 3. Run the expensive query only when needed
 
-The existing bounded probe checks the oldest 200 matching headers for a batch of 100. On the fresh million-trace fixture it filled the batch there, yet PostgreSQL still compiled code for a plan containing the unused fallback. Test a version that sends the full eligibility query only when the prefix cannot answer. On fallback, recompute the whole batch. [Compilation experiment](results/strategy-study/#why-the-first-batch-was-slow)
-
-Compare the shipped query, the current probe and the two-step version on the same connection settings. Include the rare experiment where the current probe lost. Count SQL calls and time the full selection transaction, including round trips. For the two-step test, use a short read-only repeatable-read transaction so both reads see the same data. Between reads, have a second connection commit a change that makes an older trace eligible. Check the answer against the original snapshot and verify the next transaction sees the change. [Rare-experiment result](results/strategy-study/matrix.md) · [PostgreSQL snapshot rules](https://www.postgresql.org/docs/16/transaction-iso.html#XACT-REPEATABLE-READ)
-
-Advance a query change only if it preserves the ordered results, removes a measurable fresh-queue cost, and retains a late-queue benefit through the driver. Publish any losses alongside the wins. The paired benchmark stands on its own if the rewrite falls short.
+**Completed.** Sending the fallback separately reduced the fresh million-trace median from 14.79 ms to 1.40 ms. Both reads preserved their original snapshot across a concurrent commit. The oldest-first queue benefited from the full eligibility scan, while MLflow’s finder was 5.1× faster than the two-step selector on the scattered queue at the same archive percentage. The evidence supports contributing the contrasting benchmark cases and keeping the selector experimental. [Driver measurements](README.md#deferring-the-fallback) · [Concurrency test](test_two_step.py)
 
 ## What earns the next experiment
 
