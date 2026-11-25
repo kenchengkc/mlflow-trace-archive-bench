@@ -12,7 +12,18 @@ from local_postgres import Sql, local_postgres
 SQL_DIR = Path(__file__).resolve().parent / "sql"
 INDEX = "index_trace_info_timestamp_ms_request_id"
 CREATE_INDEX = f"CREATE INDEX {INDEX} ON trace_info (timestamp_ms, request_id);"
-QUERY = (SQL_DIR / "candidates.sql").read_text().strip().removesuffix(";")
+ALL_EXPERIMENTS = tuple(range(1, 9))
+MLFLOW_REVISION = "3128eb46928fab08500124e9e0cde6791cf845aa"
+
+
+def scoped_query(filename: str, experiment_ids: tuple[int, ...]) -> str:
+    if not experiment_ids or any(type(i) is not int or not 0 <= i <= 2147483647 for i in experiment_ids):
+        raise ValueError("specify one or more nonnegative PostgreSQL integer experiment IDs")
+    ids = ", ".join(str(i) for i in sorted(set(experiment_ids)))
+    return (SQL_DIR / filename).read_text().strip().removesuffix(";").replace(":experiment_ids", ids)
+
+
+QUERY = scoped_query("candidates.sql", ALL_EXPERIMENTS)
 EXPLAIN = "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) " + QUERY
 
 
@@ -40,13 +51,24 @@ def measure(sql: Sql, batch_size: int, samples: int) -> tuple[dict, str]:
     result_rows = sql(QUERY, variables=values)
     sql(EXPLAIN, variables=values)  # Warm the chosen plan once before collecting samples.
     plans = [json.loads(sql(EXPLAIN, variables=values))[0] for _ in range(samples)]
+    return summarize_plans(plans), result_rows
+
+
+def summarize_plans(plans: list[dict]) -> dict:
     times = [plan["Execution Time"] for plan in plans]
     median = statistics.median(times)
     return {
         "median_ms": median,
         "samples_ms": times,
+        "planning_samples_ms": [plan["Planning Time"] for plan in plans],
         "representative_plan": min(plans, key=lambda p: abs(p["Execution Time"] - median)),
-    }, result_rows
+    }
+
+
+def postgres_settings(sql: Sql) -> dict:
+    return json.loads(sql("""SELECT json_object_agg(name, current_setting(name))
+            FROM pg_settings WHERE name IN ('server_version', 'shared_buffers', 'work_mem',
+                'max_parallel_workers_per_gather', 'random_page_cost', 'jit', 'block_size');"""))
 
 
 def run_case(rows: int, archived_pct: int, batch_size: int, samples: int, indexed_first: bool):
@@ -67,9 +89,7 @@ def run_case(rows: int, archived_pct: int, batch_size: int, samples: int, indexe
         returned = results["baseline"].splitlines()
         if len(returned) != expected_rows:
             raise RuntimeError(f"Expected {expected_rows} candidates, got {len(returned)}.")
-        settings = json.loads(sql("""SELECT json_object_agg(name, current_setting(name))
-            FROM pg_settings WHERE name IN ('server_version', 'shared_buffers', 'work_mem',
-                'max_parallel_workers_per_gather', 'random_page_cost', 'jit', 'block_size');"""))
+        settings = postgres_settings(sql)
     case = {
         "rows": rows, "archived_pct": archived_pct, **counts, "returned": len(returned),
         "result_sha256": hashlib.sha256(results["baseline"].encode()).hexdigest(),
@@ -96,7 +116,7 @@ def main() -> None:
     if any(p < 0 or p > 100 for p in args.archived_pct):
         parser.error("--archived-pct must be between 0 and 100 inclusive")
     report = {
-        "mlflow_revision": "3128eb46928fab08500124e9e0cde6791cf845aa",
+        "mlflow_revision": MLFLOW_REVISION,
         "system": platform.system(), "architecture": platform.machine(), "cpu_count": os.cpu_count(),
         "python": platform.python_version(),
         "batch_size": args.batch_size, "samples_per_variant": args.samples, "cases": [],

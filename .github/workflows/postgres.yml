@@ -7,6 +7,11 @@ on:
       - '.github/workflows/postgres.yml'
   pull_request:
   workflow_dispatch:
+    inputs:
+      full_study:
+        description: Run the 100k workload matrix and million-trace checks
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -14,18 +19,48 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Use PostgreSQL 16
         run: echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
-      - name: Check candidate eligibility and ordering
+      - name: Check eligibility, ordering, and changes between batches
         run: python3 -m unittest -v
-      - name: Run the workload matrix
+      - name: Check the strategy runner and report
+        run: |
+          python3 study.py --rows 512 --archived-pct 0 100 --batch-size 3 --samples 1 --output smoke.json.gz
+          python3 summarize.py smoke.json.gz --with-planning --buffers
+      - name: Run the original index comparison
         run: python3 benchmark.py --output benchmark-result.json
-      - name: Save timings and query plans
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: postgres16-results
           path: benchmark-result.json
+          if-no-files-found: error
+  study:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_study
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: matrix, rows: 100000, pct: '0 50 95 99 100', scopes: '1 8 1,2,3,4,5,6,7,8', batches: '3 100 1000' }
+          - { name: million-start, rows: 1000000, pct: '0', scopes: '1,2,3,4,5,6,7,8', batches: '100' }
+          - { name: million-late, rows: 1000000, pct: '95', scopes: '1,2,3,4,5,6,7,8', batches: '100' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Compare the queries in all six execution orders
+        run: >
+          python3 study.py --rows ${{ matrix.rows }} --archived-pct ${{ matrix.pct }}
+          --scope ${{ matrix.scopes }} --batch-size ${{ matrix.batches }}
+          --samples 6 --output ${{ matrix.name }}.json.gz
+      - run: python3 summarize.py ${{ matrix.name }}.json.gz --with-planning >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: study-${{ matrix.name }}
+          path: ${{ matrix.name }}.json.gz
           if-no-files-found: error

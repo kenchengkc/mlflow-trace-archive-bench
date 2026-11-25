@@ -8,6 +8,15 @@ An MLflow operator reported that asking PostgreSQL 16 for just three traces coul
 
 MLflow Tracing records what happens during an AI request, including individual model and tool calls. Databricks uses those traces for debugging, evaluation, and monitoring. The open-source MLflow tracking server supports a PostgreSQL backend. Its archival worker needs to find completed traces whose span data can move out of the tracking database. A slow selection query can delay each pass before the worker moves its first trace. The measurements here apply to that open-source SQL path. Databricks also offers managed trace storage in Unity Catalog. [Databricks tracing overview](https://docs.databricks.com/aws/en/mlflow3/genai/tracing/overview) · [MLflow candidate selection](https://github.com/mlflow/mlflow/blob/3128eb46928fab08500124e9e0cde6791cf845aa/mlflow/store/tracking/sqlalchemy_store.py)
 
+## Compare query strategies
+
+The strategy study measures the shipped global query, a per-experiment merge, and a query that tests a bounded prefix of the queue. All three must return the same ordered rows on the same database. A default run compares a rare experiment with all eight experiments, both before archival and after the oldest 95% of eligible traces have moved.
+
+```sh
+python3 study.py --output study-result.json.gz
+python3 summarize.py study-result.json.gz --with-planning --buffers
+```
+
 ## PostgreSQL 16 result
 
 Median time to select the next **100 traces** from 100,000 synthetic traces on a four-CPU Ubuntu runner with PostgreSQL 16.16. Each cell represents seven warm executions.

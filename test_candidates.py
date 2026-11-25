@@ -1,10 +1,8 @@
 import unittest
-from pathlib import Path
 
+from benchmark import QUERY, SQL_DIR
 from local_postgres import local_postgres
 
-
-SQL_DIR = Path(__file__).resolve().parent / "sql"
 
 # Insert the tied candidates in reverse ID order. Give each excluded trace a
 # single reason to be skipped, so dropping any predicate changes the answer.
@@ -39,7 +37,6 @@ INSERT INTO trace_tags (request_id, key, value) VALUES
 
 class CandidateQueryTest(unittest.TestCase):
     def test_eligible_rows_in_order_with_and_without_index(self):
-        query = (SQL_DIR / "candidates.sql").read_text()
         expected = [
             "first|2|1699999999998",
             "tie-a|8|1699999999999",
@@ -57,7 +54,7 @@ class CandidateQueryTest(unittest.TestCase):
                     )
                 for batch_size in (10, 2, 0):
                     with self.subTest(indexed=indexed, batch_size=batch_size):
-                        rows = sql(query, variables={"batch_size": batch_size}).splitlines()
+                        rows = sql(QUERY, variables={"batch_size": batch_size}).splitlines()
                         self.assertEqual(rows, expected[:batch_size])
 
 

@@ -3,7 +3,7 @@
 -- https://github.com/mlflow/mlflow/issues/24895
 SELECT t.request_id, t.experiment_id, t.timestamp_ms
 FROM trace_info AS t
-WHERE t.experiment_id IN (1, 2, 3, 4, 5, 6, 7, 8)
+WHERE t.experiment_id IN (:experiment_ids)
   AND t.timestamp_ms <= 1700000000000
   AND t.status <> 'IN_PROGRESS'
   AND NOT EXISTS (
