@@ -1,3 +1,5 @@
 __pycache__/
+.venv/
+/driver-study.json.gz
 benchmark-result.json
 study-result.json.gz

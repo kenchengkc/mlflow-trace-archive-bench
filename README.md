@@ -45,6 +45,20 @@ Both global queries used the same timestamp and trace-ID index. The oldest-first
 
 Times are medians of six warm PostgreSQL 16.16 runs per query and include database planning and execution. Buffer counts come from one representative plan per layout and include repeated accesses. All three queries returned the independently verified ordered batch for each fixture. [Raw samples and plans](results/strategy-study/matched-queues.json.gz) · [PostgreSQL run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45667039308)
 
+### Through MLflow’s database driver
+
+MLflow 3.18.0 took **112.18 ms** to select 100 traces from the oldest-first queue and **4.84 ms** from the equally archived scattered queue. We ran its actual SQLAlchemy candidate finder on three 100,000-trace databases initialized by MLflow’s migrations. Every timed call returned the expected trace IDs, experiment IDs and timestamps in order, with the same result digest as the earlier raw SQL study. [Upstream finder](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L7151-L7230)
+
+| Queue | MLflow finder (ms) | Raw global SQL (ms) | Replay of MLflow’s SQL (ms) |
+| --- | ---: | ---: | ---: |
+| Fresh | 1.70 | 0.94 | 0.95 |
+| 95% archived, oldest first | 112.18 | 111.20 | 110.70 |
+| 95% archived, scattered | 4.84 | 4.05 | 4.04 |
+
+The raw column runs this repository’s global query directly. The replay runs the exact SQL and bound parameters captured from MLflow. Each value is the median of 12 caller-side measurements on PostgreSQL 16.16, from opening the managed session through fetching the batch, committing and closing the session. The methods shared one warm psycopg2 connection per queue and ran in all six possible orders. The finder’s median was 0.76 ms above raw SQL on the fresh queue and 0.98 ms above it on the oldest-first queue. [Timing samples, SQL and plans](results/driver-study.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45670762246)
+
+The earlier reduced-schema study measured server planning and execution alone. Its fresh-queue plan scanned 30,882 tag rows looking for a span-location tag. MLflow’s migration puts the tag key first in the primary index, while the reduced fixture puts the trace ID first. Both migrated plans used that index for the lookup and found zero matching tags. [Earlier plan](results/strategy-study/matrix.json.gz) · [MLflow migration](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/db_migrations/versions/867495a8f9d4_add_trace_tables.py#L57) · [Reduced schema](sql/schema.sql)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -74,6 +88,14 @@ python3 matched_queues.py --output matched-queues.json.gz
 ```
 
 To inspect the published comparison with Python alone, run `python3 summarize.py results/strategy-study/matched-queues.json.gz --with-planning --buffers`.
+
+To repeat the driver comparison, install the pinned MLflow release and driver in a virtual environment. The study initializes a fresh MLflow database for each queue.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-driver.txt
+.venv/bin/python driver_study.py --output driver-study.json.gz
+```
 
 The million-trace study uses the following commands.
 

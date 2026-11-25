@@ -10,9 +10,7 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 ## 2. Reproduce the result through MLflow
 
-Run the fresh queue and both 95% layouts against a PostgreSQL database initialized with MLflow’s migrations. Invoke the pinned SQLAlchemy store’s candidate finder with its normal driver and bound parameters. Check the ordered trace IDs, experiment IDs and timestamps against the fixture. Record the time the caller waits on a warm connection and collect database plans separately.
-
-The deliverable is a benchmark a maintainer can run against an MLflow checkout. If the store produces a different plan or reverses a timing result from raw SQL, publish that difference before testing a rewrite. The fresh and oldest-first cases are the first pair to propose for MLflow’s tracing benchmark suite. [Candidate finder](https://github.com/mlflow/mlflow/blob/dc89dad0dd603499fd71304c838e62ffbc14dfb9/mlflow/store/tracking/sqlalchemy_store.py#L7271-L7350) · [MLflow benchmarks](https://github.com/mlflow/mlflow/tree/dc89dad0dd603499fd71304c838e62ffbc14dfb9/dev/benchmarks/tracing)
+**Completed.** The MLflow 3.18.0 finder reproduced all three ordered batches on migrated PostgreSQL databases. The oldest-first queue still took the longest. A different tag-index order changed the fresh-queue plan. The driver runner now provides a baseline for testing the two-step query below. [Driver results](README.md#through-mlflows-database-driver) · [Benchmark code](driver_study.py)
 
 ## 3. Run the expensive query only when needed
 
