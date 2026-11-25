@@ -75,6 +75,19 @@ The largest fresh-queue difference appeared at **one million traces**. The singl
 
 To verify the order under concurrent writes, a test commits two changes on a second PostgreSQL connection between the probe and fallback. An older trace becomes eligible and a tied candidate is archived. The fallback returns the exact pre-commit batch, including both tied IDs in order. A new transaction sees both changes and agrees with MLflow’s finder. [Concurrency test](test_two_step.py)
 
+### From 1,000 to 1,001 experiments
+
+Adding experiment 1,001 to the selection triggered a second candidate query and increased median batch-selection time by **0.90 ms** on this fixture. We asked MLflow 3.18.0 for the oldest 100 traces on the same migrated PostgreSQL 16.16 database, with 101 eligible traces in each of 1,001 experiments. [MLflow’s finder and merge](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L7112-L7230)
+
+| Selected experiments | Candidate SELECTs | Rows returned per SELECT | Rows kept per chunk | Median ms (min–max) |
+| ---: | ---: | --- | --- | ---: |
+| 1,000 | 1 | 100 | 100 | 2.68 (2.64–2.72) |
+| 1,001 | 2 | 100 + 100 | 50 + 50 | 3.58 (3.52–3.73) |
+
+Experiments 1,000 and 1,001 had traces with identical timestamps on either side of the chunk boundary. At the batch cutoff, trace ID `…0062` from experiment 1,000 ranked 100th and `…0063` from experiment 1,001 ranked 101st at the same timestamp. Every timed batch matched an independent global sort by timestamp and trace ID. Swapping the two experiments between chunks also preserved the exact order. [Fixture](chunk_fixture.py) · [Ordering test](test_chunk_study.py)
+
+Timings cover 12 complete transactions per scope on one warm connection, alternating which scope ran first. The untimed query captures and replays verified the IDs, limits and row counts for each SELECT. [Raw samples, ordered rows and plans](results/chunk-study.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45676900586)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -118,6 +131,12 @@ With the same environment, run the concurrency checks and compare the three sele
 ```sh
 .venv/bin/python -m unittest -v test_two_step
 .venv/bin/python two_step_study.py --output two-step.json.gz
+```
+
+To compare 1,000 and 1,001 selected experiments on the same database and verify the merged order, run the chunk study.
+
+```sh
+.venv/bin/python chunk_study.py --output chunk-study.json.gz
 ```
 
 The million-trace study uses the following commands.

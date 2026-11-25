@@ -16,6 +16,10 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 **Completed.** Sending the fallback separately reduced the fresh million-trace median from 14.79 ms to 1.40 ms. Both reads preserved their original snapshot across a concurrent commit. The oldest-first queue benefited from the full eligibility scan, while MLflow’s finder was 5.1× faster than the two-step selector on the scattered queue at the same archive percentage. The evidence supports contributing the contrasting benchmark cases and keeping the selector experimental. [Driver measurements](README.md#deferring-the-fallback) · [Concurrency test](test_two_step.py)
 
+## 4. Cross the experiment chunk boundary
+
+**Completed.** With 1,000 selected experiments, one query supplied the entire 100-trace batch. Adding experiment 1,001 made MLflow fetch 100 candidates from each of two queries. On a fixture with tied timestamps across the boundary, 50 rows from each query survived the merge. Swapping the tied experiments between chunks preserved the exact order. [Measurements](README.md#from-1000-to-1001-experiments) · [Boundary test](test_chunk_study.py)
+
 ## What earns the next experiment
 
-Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The next candidate is experiment count. The original operator had thousands of experiments, while this study uses eight. Compare 1,000 and 1,001 selected experiments. Put eligible traces with tied timestamps in both query chunks, then measure query count and verify the merged order. Concurrent ingestion and larger spans are separate follow-ups if measurements point there. [Operator report](https://github.com/mlflow/mlflow/issues/24895) · [MLflow’s chunk size](https://github.com/mlflow/mlflow/blob/dc89dad0dd603499fd71304c838e62ffbc14dfb9/mlflow/store/tracking/utils/trace_archival.py#L24)
+Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. Concurrent ingestion and larger spans are separate follow-ups if measurements point there. [Operator report](https://github.com/mlflow/mlflow/issues/24895)
