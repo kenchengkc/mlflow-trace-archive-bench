@@ -48,10 +48,9 @@ def total_ms(measurement):
     return [planning + execution for planning, execution in pairs]
 
 
-def figure(height, title, caption, theme):
+def figure(height, title, theme):
     fig = plt.figure(figsize=(9.4, height), facecolor=theme.background)
     fig.text(.035, 1 - .22 / height, title, va="top", fontsize=20, weight="bold", color=theme.ink)
-    fig.text(.037, 1 - .62 / height, caption, va="top", fontsize=11.5, color=theme.muted)
     return fig
 
 
@@ -67,17 +66,15 @@ def log_axis(ax, ticks, labels, theme):
 
 
 def latency_chart(start, late, theme, suffix):
-    fig = figure(5.1, "Time to select the next 100 traces",
-                 "1 million synthetic traces  ·  All eight experiments  ·  PostgreSQL "
-                 + start["postgres_settings"]["server_version"].split()[0], theme)
-    ax = fig.add_axes([.25, .18, .37, .56])
+    fig = figure(4.35, "Time to select the next 100 traces", theme)
+    ax = fig.add_axes([.25, .16, .37, .63])
     log_axis(ax, [1, 10, 100, 1000], ["1", "10", "100", "1,000"], theme)
     ax.set(xlim=(.75, 2600), ylim=(7.05, -.95), yticks=[])
-    ax.set_xlabel("Time (ms, log scale)", fontsize=11, color=theme.muted, labelpad=7)
+    ax.set_xlabel("Planning + execution time (ms, log scale)", fontsize=11, color=theme.muted, labelpad=7)
     # Align the text columns to the plotted rows while keeping the log scale independent.
     row_coordinates = blended_transform_factory(fig.transFigure, ax.transData)
     for x, title in [(.757, "Median (ms)"), (.965, "Six-run range (ms)")]:
-        fig.text(x, .772, title, fontsize=11, weight="bold", ha="right", color=theme.muted)
+        fig.text(x, .82, title, fontsize=11, weight="bold", ha="right", color=theme.muted)
 
     for offset, report, color, marker in [(0, start, theme.fresh, "o"), (4, late, theme.late, "D")]:
         case = report["cases"][0]
@@ -97,22 +94,18 @@ def latency_chart(start, late, theme, suffix):
                 fig.text(x, y, text, transform=row_coordinates, ha=align, va="center",
                          fontsize=11.5, weight=weight, color=theme.ink)
 
-    fig.text(.035, .026, "Markers show median planning + execution time. Whiskers span the fastest "
-             "and slowest of six runs.", fontsize=10, color=theme.muted)
     fig.savefig(HERE / f"query-latency{suffix}.png", dpi=180)
     plt.close(fig)
 
 
 def scope_chart(report, theme, suffix):
-    fig = figure(4.65, "At 95% archived, scope changes which query is faster",
-                 "100,000 synthetic traces  ·  Batch limit 100  ·  Bounded probe time divided by global query time",
-                 theme)
+    fig = figure(3.95, "Bounded probe time by experiment scope", theme)
     cases = {(tuple(c["experiment_ids"]), c["archived_pct"]): c for c in report["cases"]
              if c["rows"] == 100_000 and c["batch_size"] == 100}
     scopes = [((1,), "Frequent experiment (ID 1)"), ((8,), "Rare experiment (ID 8)"), (ALL, "All eight experiments")]
-    fig.text(.036, .696, "Archived", color=theme.muted, fontsize=10.5, weight="bold")
+    fig.text(.036, .80, "Archived", color=theme.muted, fontsize=10.5, weight="bold")
     for i, (scope, title) in enumerate(scopes):
-        ax = fig.add_axes([.13 + i * .286, .215, .251, .445])
+        ax = fig.add_axes([.13 + i * .286, .22, .251, .54])
         log_axis(ax, [.25, .5, 1, 2, 4], ["¼×", "½×", "1×", "2×", "4×"], theme)
         ax.set(xlim=(.15, 6.6), ylim=(4.55, -.55))
         ax.set_title(title, fontsize=11.5, color=theme.ink, weight="bold", pad=12)
@@ -131,7 +124,7 @@ def scope_chart(report, theme, suffix):
             if i == 0:
                 ax.text(-.12, y, f"{pct}%", transform=ax.get_yaxis_transform(), ha="right",
                         va="center", color=theme.ink, fontsize=11.5)
-    fig.text(.5, .065, "Relative median time (log scale)  ·  Below 1× favors the bounded probe",
+    fig.text(.5, .055, "Median time ratio (bounded probe / global query, log scale)",
              ha="center", fontsize=11, color=theme.muted)
     fig.savefig(HERE / f"scope-and-depth{suffix}.png", dpi=180)
     plt.close(fig)

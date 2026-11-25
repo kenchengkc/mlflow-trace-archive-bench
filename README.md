@@ -15,7 +15,7 @@ On **one million synthetic traces**, MLflow’s global query selected the first 
   <img src="results/strategy-study/query-latency.png" alt="Time to select 100 traces across eight experiments. The global query was fastest at 0% archived and the bounded probe was fastest at 95% archived. Exact times and observed ranges follow.">
 </picture>
 
-Measured on PostgreSQL 16.16. Each timing includes server planning and execution. Both workloads used all eight experiments and the same indexes. [Fresh-queue samples and plan](results/strategy-study/million-start.json.gz) · [Late-queue samples and plan](results/strategy-study/million-late.json.gz) · [How the queries work](results/strategy-study/README.md#three-queries-identical-answers)
+Markers show median planning and execution time. Whiskers span the fastest and slowest of six runs. Both workloads used PostgreSQL 16.16, all eight experiments, and the same indexes. [Fresh-queue samples and plan](results/strategy-study/million-start.json.gz) · [Late-queue samples and plan](results/strategy-study/million-late.json.gz) · [How the queries work](results/strategy-study/README.md#three-queries-identical-answers)
 
 <details>
 <summary>Exact timings and observed ranges</summary>
@@ -50,7 +50,7 @@ For that workload the bounded probe took **21.52 ms**, compared with **17.26 ms*
   <img src="results/strategy-study/scope-and-depth.png" alt="Bounded probe time divided by global query time on 100,000 traces. At 95% archived, the ratios are 0.40 for the frequent experiment, 1.25 for the rare experiment and 0.26 for all eight. Values below one favor the probe.">
 </picture>
 
-[Full timing table](results/strategy-study/matrix.md) · [Raw samples and query plans](results/strategy-study/matrix.json.gz) · [Workload and timing method](results/strategy-study/README.md#workload-and-timing)
+Values below 1× favor the bounded probe. [Full timing table](results/strategy-study/matrix.md) · [Raw samples and query plans](results/strategy-study/matrix.json.gz) · [Workload and timing method](results/strategy-study/README.md#workload-and-timing)
 
 ## Reproduce the benchmark
 
