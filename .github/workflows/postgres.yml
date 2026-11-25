@@ -1,0 +1,31 @@
+name: PostgreSQL benchmark
+on:
+  push:
+    paths:
+      - '**.py'
+      - 'sql/**'
+      - '.github/workflows/postgres.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres16:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Use PostgreSQL 16
+        run: echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Check candidate eligibility and ordering
+        run: python3 -m unittest -v
+      - name: Run the workload matrix
+        run: python3 benchmark.py --output benchmark-result.json
+      - name: Save timings and query plans
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres16-results
+          path: benchmark-result.json
+          if-no-files-found: error
