@@ -22,7 +22,7 @@ For a first live run, install PostgreSQL on macOS or Linux and put `initdb`, `pg
 python3 matched_queues.py --rows 1000 --batch-size 3 --samples 2
 ```
 
-For studies that call MLflow’s tracking store, install the pinned dependencies in a virtual environment. [Run the finder](results/finder/README.md#reproduce-these-studies) · [Run concurrent ingestion](results/ingestion/README.md#reproduce-the-studies)
+For studies that call MLflow’s tracking store, install the pinned dependencies in a virtual environment. [Run the finder](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/#reproduce-these-studies) · [Run concurrent ingestion](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#reproduce-the-studies)
 
 ```sh
 python3 -m venv .venv
@@ -38,15 +38,15 @@ MLflow added an index after an operator reported waiting minutes to select three
   <img src="results/strategy-study/query-latency.png" alt="Time to select 100 traces. The global query was fastest on a fresh queue. The bounded probe was fastest after the oldest 95% had been archived.">
 </picture>
 
-Markers show median PostgreSQL planning and execution time across six runs. Whiskers show the observed range. [Exact timings and query plans](results/strategy-study/README.md#what-changed-at-one-million-traces)
+Markers show median PostgreSQL planning and execution time across six runs. Whiskers show the observed range. [Exact timings and query plans](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/#what-changed-at-one-million-traces)
 
 ## Study guides
 
 | Guide | Selected results |
 | --- | --- |
-| [SQL query strategies](results/strategy-study/README.md) | <a name="two-queues-with-95-archived"></a>[Queue layout changed the fastest query at 95% archived](results/strategy-study/README.md#two-queues-with-95-archived) · [Frequent and rare experiments](results/strategy-study/README.md#how-experiment-scope-changes-the-result) |
-| [MLflow’s candidate finder](results/finder/README.md) | <a name="through-mlflows-database-driver"></a>[Driver vs. raw SQL](results/finder/README.md#through-mlflows-database-driver) · <a name="deferring-the-fallback"></a>[Two-step selection](results/finder/README.md#deferring-the-fallback) · <a name="from-1000-to-1001-experiments"></a>[Experiment 1,001 triggered a second query](results/finder/README.md#from-1000-to-1001-experiments) |
-| [Concurrent trace ingestion](results/ingestion/README.md) | <a name="selection-during-trace-ingestion"></a>[Selection during writes](results/ingestion/README.md#selection-during-trace-ingestion) · <a name="larger-incoming-spans"></a>[64 KiB spans cut write throughput by about 25%](results/ingestion/README.md#larger-incoming-spans) · <a name="where-the-64-kib-write-time-goes"></a>[Write timings](results/ingestion/README.md#where-the-64-kib-write-time-goes) · <a name="inside-the-span-upsert"></a>[Inside the span upsert](results/ingestion/README.md#inside-the-span-upsert) |
+| [SQL query strategies](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/) | <a name="two-queues-with-95-archived"></a>[Queue layout changed the fastest query at 95% archived](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/#two-queues-with-95-archived) · [Frequent and rare experiments](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/#how-experiment-scope-changes-the-result) |
+| [MLflow’s candidate finder](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/) | <a name="through-mlflows-database-driver"></a>[Driver vs. raw SQL](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/#through-mlflows-database-driver) · <a name="deferring-the-fallback"></a>[Two-step selection](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/#deferring-the-fallback) · <a name="from-1000-to-1001-experiments"></a>[Experiment 1,001 triggered a second query](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/#from-1000-to-1001-experiments) |
+| [Concurrent trace ingestion](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/) | <a name="selection-during-trace-ingestion"></a>[Selection during writes](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#selection-during-trace-ingestion) · <a name="larger-incoming-spans"></a>[64 KiB spans cut write throughput by about 25%](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#larger-incoming-spans) · <a name="where-the-64-kib-write-time-goes"></a>[Write timings](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#where-the-64-kib-write-time-goes) · <a name="inside-the-span-upsert"></a>[Inside the span upsert](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#inside-the-span-upsert) |
 
 [Documentation home](https://kenchengkc.github.io/mlflow-trace-archive-bench/) · [Project roadmap](ROADMAP.md)
 

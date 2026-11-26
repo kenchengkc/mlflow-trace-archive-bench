@@ -10,3 +10,5 @@ __pycache__/
 /two-step-rare.json.gz
 benchmark-result.json
 study-result.json.gz
+/docs/node_modules/
+/_site/

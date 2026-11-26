@@ -12,9 +12,9 @@ The SQL study uses a reduced schema and measures server planning and execution t
 
 ## Study guides
 
-- [SQL query strategies](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/README.md): Compare the global query, the per-experiment query, and the bounded probe on different archive layouts.
-- [MLflow’s candidate finder](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/finder/README.md): Compare raw SQL and driver timings. Check query counts and trace order at 1,000 and 1,001 experiments.
-- [Concurrent trace ingestion](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/ingestion/README.md): Compare selection latency and ingestion throughput. Follow a span write through serialization, database execution, and commit.
+- [SQL query strategies](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/): Compare the global query, the per-experiment query, and the bounded probe on different archive layouts.
+- [MLflow’s candidate finder](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/): Compare raw SQL and driver timings. Check query counts and trace order at 1,000 and 1,001 experiments.
+- [Concurrent trace ingestion](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/): Compare selection latency and ingestion throughput. Follow a span write through serialization, database execution, and commit.
 
 ## Optional
 

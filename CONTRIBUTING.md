@@ -50,4 +50,19 @@ python3 -m venv .venv
 - **Report an observation.** Include the command, PostgreSQL and Python versions, workload settings, and result JSON. For a comparison, run both queries on the same fixture and identify what the timing includes. [Open an issue](https://github.com/kenchengkc/mlflow-trace-archive-bench/issues/new)
 - **Change a query.** Include a small test with the expected trace IDs in order. A timestamp tie at the last place in a batch can expose a bug that a row-count check would miss. In the pull request, explain the change and list the checks you ran. [Ordering tests](test_strategies.py) · [Pull requests](https://github.com/kenchengkc/mlflow-trace-archive-bench/pulls)
 
-The study guides give the exact commands for each published workload. [SQL strategies](results/strategy-study/README.md#replay) · [MLflow finder](results/finder/README.md#reproduce-these-studies) · [Trace ingestion](results/ingestion/README.md#reproduce-the-studies) · [Project roadmap](ROADMAP.md)
+The study guides give the exact commands for each published workload. [SQL strategies](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/strategy-study/#replay) · [MLflow finder](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/finder/#reproduce-these-studies) · [Trace ingestion](https://kenchengkc.github.io/mlflow-trace-archive-bench/guides/ingestion/#reproduce-the-studies) · [Project roadmap](ROADMAP.md)
+
+## Preview the study guides
+
+Edit the README in `results/strategy-study/`, `results/finder/`, or `results/ingestion/`. GitHub Pages rebuilds the guide and its page outline when the change reaches `main`.
+
+To preview the site locally, use Node.js 24 and Python 3.
+
+```sh
+npm ci --prefix docs
+npm run build --prefix docs
+node docs/check-site.mjs
+python3 -m http.server --directory _site 8000
+```
+
+Open [the local site](http://localhost:8000/) and select a guide from the sidebar.

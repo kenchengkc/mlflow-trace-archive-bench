@@ -1,0 +1,57 @@
+<div class="overview">
+  <h1>Trace archival on PostgreSQL</h1>
+  <p>This benchmark measures how long PostgreSQL takes to find the next batch of traces for MLflow to archive. It checks that queries return the oldest eligible traces first and use the trace ID to break timestamp ties.</p>
+</div>
+
+<section id="quick-start" aria-labelledby="quick-heading">
+  <h2 id="quick-heading">Read a saved report</h2>
+  <p>Use Git and Python 3.10 or later to read the <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/strategy-study/million-late.json.gz">saved million-trace report</a>. The script uses the Python standard library.</p>
+  <div class="code-example">
+    <div class="code-toolbar">
+      <span>Shell</span>
+      <button type="button" class="copy-code" hidden><span class="copy-icon" aria-hidden="true"></span><span class="copy-label">Copy</span></button>
+    </div>
+    <pre tabindex="0" aria-label="Read the saved report"><code><span class="command">git</span> clone https://github.com/kenchengkc/mlflow-trace-archive-bench.git
+<span class="command">cd</span> mlflow-trace-archive-bench
+<span class="command">python3</span> summarize.py results/strategy-study/million-late.json.gz <span class="option">--with-planning</span></code></pre>
+  </div>
+  <p>All three queries returned 100 traces. The timing columns give the median planning and execution time in milliseconds for each query.</p>
+</section>
+
+<section id="local-benchmark" aria-labelledby="local-heading">
+  <h2 id="local-heading">Run a local benchmark</h2>
+  <p>On macOS or Linux, <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/CONTRIBUTING.md#install-postgresql">install the PostgreSQL tools</a> and put <code>initdb</code>, <code>pg_ctl</code>, and <code>psql</code> on your <code>PATH</code>. Run this command from the cloned repository as a non-root user.</p>
+  <div class="code-example">
+    <div class="code-toolbar">
+      <span>Shell</span>
+      <button type="button" class="copy-code" hidden><span class="copy-icon" aria-hidden="true"></span><span class="copy-label">Copy</span></button>
+    </div>
+    <pre tabindex="0" aria-label="Run the benchmark"><code><span class="command">python3</span> matched_queues.py <span class="option">--rows</span> 1000 <span class="option">--batch-size</span> 3 <span class="option">--samples</span> 2</code></pre>
+  </div>
+  <p>The script creates two 1,000-trace queues in a temporary database. It archives the oldest 95% of eligible traces in one queue and scatters the same number across the other. It checks that all three queries return the expected trace IDs in order, then prints their timings.</p>
+</section>
+
+<section id="query-timings" aria-labelledby="queue-heading">
+  <h2 id="queue-heading">Query timings</h2>
+  <p>In the million-trace study, the global query took <strong>1.24 ms</strong> to select 100 traces from a fresh queue across eight experiments. After the benchmark archived the oldest 95% of eligible traces, the same query took <strong>1,315.50 ms</strong>. The bounded probe took <strong>284.59 ms</strong> on that queue. It checked the oldest 200 matching trace headers, found none eligible, then searched the full queue.</p>
+  <figure>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="results/strategy-study/query-latency-dark.png">
+      <img width="1692" height="782" src="results/strategy-study/query-latency.png" alt="Of the three queries, the global query was fastest on the fresh queue and the bounded probe was fastest after archival.">
+    </picture>
+    <figcaption>Points show median SQL planning and execution times from six runs on PostgreSQL 16.16. Whiskers show the range. <a href="guides/strategy-study/#what-changed-at-one-million-traces">Timing table and query plans</a></figcaption>
+  </figure>
+</section>
+
+<section id="study-guides" aria-labelledby="studies-heading">
+  <h2 id="studies-heading">Study guides</h2>
+  <dl>
+    <dt><a href="guides/strategy-study/">SQL query strategies</a></dt>
+    <dd>Compare the global query, per-experiment merge, and bounded probe on two queues with the same archive depth but different layouts.</dd>
+    <dt><a href="guides/finder/">MLflow’s candidate finder</a></dt>
+    <dd>Compare raw SQL with MLflow 3.18.0’s tracking store. Check how it merges tied timestamps when 1,001 experiments require two queries.</dd>
+    <dt><a href="guides/ingestion/">Concurrent trace ingestion</a></dt>
+    <dd>Measure how quickly MLflow selects traces while it writes new ones. Break down the cost of adding 64 KiB to each span.</dd>
+  </dl>
+  <p><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/tree/main/results">Browse the raw results</a></p>
+</section>

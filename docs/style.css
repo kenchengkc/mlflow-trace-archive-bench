@@ -102,6 +102,25 @@ pre:focus-visible { outline-offset: -3px; }
 figure { margin: 1.1rem 0 0; }
 figure img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: .4rem; }
 figcaption { margin-top: .5rem; font-size: .9rem; color: var(--secondary); }
+
+.guide { overflow-wrap: break-word; }
+.guide h2 { margin-top: 2.35rem; }
+.guide h3 { margin: 1.6rem 0 .6rem; font-size: 1.2rem; line-height: 1.35; }
+.guide ul, .guide ol { padding-inline-start: 1.5rem; }
+.guide li + li { margin-top: .5rem; }
+.guide picture, .guide img { display: block; max-width: 100%; }
+.guide img { height: auto; }
+.guide picture { margin: 1rem 0; }
+.page-outline .outline-subheading a { padding-inline-start: 1.65rem; }
+
+.table-scroll, .mermaid-diagram { max-width: 100%; margin: 1rem 0; overflow-x: auto; border: 1px solid var(--rule); border-radius: .4rem; }
+.table-scroll table { width: 100%; border-collapse: collapse; font-size: .925rem; font-variant-numeric: tabular-nums; }
+.table-scroll th, .table-scroll td { padding: .55rem .7rem; text-align: start; vertical-align: top; }
+.table-scroll th { background: var(--panel); font-weight: 650; line-height: 1.4; }
+.table-scroll td { border-top: 1px solid var(--rule); }
+.table-scroll td[style*="right"] { white-space: nowrap; }
+.mermaid-diagram svg { display: block; width: 100%; min-width: 40rem; height: auto; }
+
 dl { margin: .8rem 0 1rem; }
 dt { margin-top: 1rem; font-weight: 650; }
 dd { margin: .2rem 0 0; }

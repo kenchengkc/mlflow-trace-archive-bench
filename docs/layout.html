@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Trace archival on PostgreSQL | MLflow Trace Archival Benchmark</title>
+  <meta name="description" content="Read a saved MLflow trace archival benchmark, run it on PostgreSQL, and compare how long three SQL queries take to select the oldest eligible traces.">
+  <link rel="canonical" href="https://kenchengkc.github.io/mlflow-trace-archive-bench/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="MLflow Trace Archival Benchmark">
+  <meta property="og:description" content="Compare three PostgreSQL queries for MLflow trace archival. Read the published timings or run the benchmark locally.">
+  <meta property="og:url" content="https://kenchengkc.github.io/mlflow-trace-archive-bench/">
+  <meta property="og:image" content="https://kenchengkc.github.io/mlflow-trace-archive-bench/results/strategy-study/query-latency.png">
+  <meta property="og:image:alt" content="Median query times for a fresh queue and a 95% archived queue on one million synthetic traces.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="{{root}}style.css">
+  <script src="{{root}}ui.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="project-name" href="{{root}}">
+        <span class="trace-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        MLflow Trace Archival Benchmark
+      </a>
+      <a class="source-link" href="https://github.com/kenchengkc/mlflow-trace-archive-bench">GitHub</a>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <details class="site-menu" open>
+        <summary>Documentation menu</summary>
+        <div class="menu-body">
+          <nav class="site-nav" aria-label="Documentation">
+            <h2>Documentation</h2>
+            <ul>
+              <li><a href="{{root}}">Benchmark overview</a></li>
+            </ul>
+            <h2>Study guides</h2>
+            <ul>
+              <li><a href="{{root}}guides/strategy-study/">SQL query strategies</a></li>
+              <li><a href="{{root}}guides/finder/">MLflow’s candidate finder</a></li>
+              <li><a href="{{root}}guides/ingestion/">Concurrent trace ingestion</a></li>
+            </ul>
+            <h2>Project</h2>
+            <ul>
+              <li><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/tree/main/results">Raw results</a></li>
+              <li><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/CONTRIBUTING.md">Contributing</a></li>
+            </ul>
+          </nav>
+        </div>
+      </details>
+    </aside>
+
+    <main id="main" tabindex="-1">
+      <article></article>
+      <footer>
+        <nav aria-label="Additional resources">
+          <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/LICENSE">Apache License 2.0</a>
+          <a href="{{root}}llms.txt">Plain-text index</a>
+        </nav>
+      </footer>
+    </main>
+
+    <nav class="page-outline" aria-labelledby="contents-heading">
+      <h2 id="contents-heading">On this page</h2>
+      <ul></ul>
+    </nav>
+  </div>
+</body>
+</html>
