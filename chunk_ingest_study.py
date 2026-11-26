@@ -128,13 +128,13 @@ def db_sql(sql, name):
 
 
 def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, padding_bytes=None,
-                  profiled=None):
+                  profiled=None, *, upsert_probe=None):
     size = None if mode == "writer_only" else int(mode.split("_")[1])
     mixed = mode.startswith("mixed")
     count = traces if mixed or size is None else 0
     pipe.send((uri, count, padding_bytes, profiled))
     writer_pids = receive(pipe, "ready")
-    with open_store(uri) as store:
+    with open_store(uri) as store, ExitStack() as probes:
         store.engine.dispose()
         reader_pid = backend_pid(store)
         if not writer_pids or reader_pid in writer_pids:
@@ -142,6 +142,9 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
         # Warm both finder paths on every clone, including the writer-only control.
         for n in SIZES:
             select_once(store, scopes[n], expected[n], reader_pid)
+        if upsert_probe is not None:
+            # Both connections are warm. The writer is blocked until the first finder call.
+            upsert = probes.enter_context(upsert_probe(sql, count, padding_bytes))
         intervals = []
         if mixed:
             # The release call straddles the start fence and is excluded from the median.
@@ -165,6 +168,8 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
     if len(commits) != count:
         raise RuntimeError("Writer acknowledgement count differs from the requested workload")
     result = {"mode": mode, "writer": None, "finder": None}
+    if upsert_probe is not None:
+        result["upsert"] = upsert
     if profiled is not None:
         result["profiled"] = profiled
     if count:
@@ -190,17 +195,21 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
     return result
 
 
-def run_trials(schedule, traces, idle_calls, study_settings, *, record_durability=False):
+def run_trials(schedule, traces, idle_calls, study_settings, *, record_durability=False,
+               upsert_probe=None):
     """Give every scheduled trial a fresh clone of the same verified fixture."""
     from sqlalchemy.engine import make_url
 
     if traces < 2:
         raise ValueError("Use at least two ingested traces per writer trial")
     scopes = {size: list(map(str, range(1, size+1))) for size in SIZES}
-    with local_database() as (sql, uri), writer_process() as pipe:
+    with local_database(preload_pg_stat_statements=upsert_probe is not None) as (sql, uri), writer_process() as pipe:
         url = make_url(uri)
         sql("CREATE DATABASE ingest_seed")
         seed_sql = db_sql(sql, "ingest_seed")
+        if upsert_probe is not None:
+            from upsert_server import prepare_server_stats
+            extension_version = prepare_server_stats(seed_sql)
         with open_store(url.set(database="ingest_seed").render_as_string(hide_password=False)) as store:
             fixture = prepare_chunk_fixture(seed_sql)
             checks = {n: verify_scope(store, ids) for n, ids in scopes.items()}
@@ -221,11 +230,19 @@ def run_trials(schedule, traces, idle_calls, study_settings, *, record_durabilit
                 SELECT json_object_agg(name, current_setting(name)) FROM pg_settings
                 WHERE name IN ('fsync', 'synchronous_commit', 'full_page_writes', 'wal_sync_method');
             """)))
+        if upsert_probe is not None:
+            report["postgres_settings"].update(json.loads(seed_sql("""
+                SELECT json_object_agg(name, current_setting(name)) FROM pg_settings
+                WHERE name IN ('wal_level', 'wal_compression', 'default_toast_compression', 'compute_query_id',
+                               'pg_stat_statements.track', 'pg_stat_statements.track_planning');
+            """)))
+            report["pg_stat_statements_version"] = extension_version
         trial_uri = url.set(database="ingest_trial").render_as_string(hide_password=False)
         for round_no, mode, padding_bytes, *profile_option in schedule:
             sql("CREATE DATABASE ingest_trial TEMPLATE ingest_seed")
             trial = measure_trial(trial_uri, db_sql(sql, "ingest_trial"), pipe, mode, scopes,
-                                  expected, traces, idle_calls, padding_bytes, *profile_option)
+                                  expected, traces, idle_calls, padding_bytes, *profile_option,
+                                  upsert_probe=upsert_probe)
             if padding_bytes is not None:
                 trial["padding_bytes"] = padding_bytes
             report["trials"].append({"round": round_no, **trial})

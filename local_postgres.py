@@ -16,7 +16,7 @@ class Sql(Protocol):
 
 
 @contextmanager
-def local_database() -> Iterator[tuple[Sql, str]]:
+def local_database(*, preload_pg_stat_statements: bool = False) -> Iterator[tuple[Sql, str]]:
     """Yield a psql runner and SQLAlchemy URI for the same disposable server."""
     binaries = {}
     for name in ("initdb", "pg_ctl", "psql"):
@@ -67,8 +67,10 @@ def local_database() -> Iterator[tuple[Sql, str]]:
             return output.removesuffix("\n")
 
         try:
-            run("pg_ctl", [*control, "-l", str(log_file), "-o",
-                           f"-c listen_addresses= -k {tmp} -p 5432", "start"])
+            options = f"-c listen_addresses= -k {tmp} -p 5432"
+            if preload_pg_stat_statements:
+                options += " -c shared_preload_libraries=pg_stat_statements"
+            run("pg_ctl", [*control, "-l", str(log_file), "-o", options, "start"])
             yield sql, f"postgresql+psycopg2://benchmark@/postgres?host={tmp}&port=5432"
         finally:
             if (data_dir / "postmaster.pid").exists():

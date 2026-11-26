@@ -5,6 +5,7 @@ __pycache__/
 /chunk-ingest.json.gz
 /payload-study.json.gz
 /phase-study.json.gz
+/upsert-study.json.gz
 /two-step.json.gz
 /two-step-rare.json.gz
 benchmark-result.json

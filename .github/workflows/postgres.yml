@@ -40,6 +40,10 @@ on:
         description: Time serialization, database writes and commits for small and 64 KiB spans
         type: boolean
         default: false
+      upsert_study:
+        description: Measure PostgreSQL execution, WAL and TOAST for real MLflow span upserts
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -70,7 +74,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -97,6 +101,18 @@ jobs:
       - name: Verify timing boundaries, stored spans and phase totals
         if: inputs.phase_study
         run: python -m unittest -v test_ingest_phases test_phase_study
+      - name: Verify statement counters, TOAST chunks and upsert measurements
+        if: inputs.upsert_study
+        run: python -m unittest -v test_upsert_server test_upsert_toast test_upsert_study
+      - name: Measure span upserts while the archival finder runs
+        if: inputs.upsert_study
+        run: python upsert_study.py --output upsert-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.upsert_study
+        with:
+          name: upsert-study
+          path: upsert-study.json.gz
+          if-no-files-found: error
       - name: Measure writer phases under concurrent selection
         if: inputs.phase_study
         run: python phase_study.py --output phase-study.json.gz >> "$GITHUB_STEP_SUMMARY"
