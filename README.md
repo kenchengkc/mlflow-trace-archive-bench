@@ -139,6 +139,23 @@ Span construction includes encoding the incoming attribute. Storage serializatio
 
 Commit time rose in some rounds and fell in others at both experiment counts, with synchronous commit enabled. Without phase timers, larger spans reduced throughput by **27.8% and 24.3%**, respectively. The estimates of added end-to-end time with and without timers differed by 1.15 and 0.55 ms per trace. All 32,768 measured writes passed readback checks, and all 63,248 finder calls in the mixed trials returned the expected ordered batch. [Per-trace samples](results/phase-study.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45745858658)
 
+### Inside the span upsert
+
+**PostgreSQL execution accounted for 76% of the extra driver time** when each incoming span carried 64 KiB more text. At 1,000 selected experiments, the driver took an extra 1.886 ms per upsert and PostgreSQL execution took an extra 1.441 ms. At 1,001 experiments, the increases were 1.850 ms and 1.412 ms. The difference includes parameter handling, SQL parsing and planning, scheduling, and the local round trip.
+
+Each row is a mean per upsert, with differences calculated before rounding. The driver timer and PostgreSQL’s `pg_stat_statements` counters cover the **same SQL calls**. Every upsert inserted a new span. The executor timer groups row, index, TOAST and WAL work together.
+
+| Experiments | Incoming span | Driver (ms) | PostgreSQL execution (ms) | Difference (ms) | WAL (bytes) | TOAST chunks | TOAST data (bytes) |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | Small | 0.315 | 0.101 | 0.215 | 1,035 | 0 | 0 |
+| 1,000 | +64 KiB | 2.201 | 1.541 | 0.660 | 71,125 | 34 | 65,964 |
+| 1,001 | Small | 0.316 | 0.101 | 0.215 | 1,035 | 0 | 0 |
+| 1,001 | +64 KiB | 2.166 | 1.513 | 0.654 | 71,125 | 34 | 65,964 |
+
+The 399-byte small span fit in the main row. PostgreSQL stored each larger span’s 65,964 bytes of JSON out of line in **34 TOAST chunks**. Per large span, the TOAST table grew by about 68 KiB and its index by 752 bytes. The upsert generated **68.7× as many write-ahead log (WAL) bytes**. These statement counters exclude the later transaction commit. [PostgreSQL statement counters](https://www.postgresql.org/docs/16/pgstatstatements.html) · [TOAST storage](https://www.postgresql.org/docs/16/storage-toast.html)
+
+Eight rounds kept the trace count fixed at 512 per trial while MLflow’s finder ran concurrently. Counter and storage snapshots excluded the warmup. We matched all 16,384 driver upserts to server executions and verified the expected ordered batch on all 25,442 finder calls. [Raw driver times, server counters and TOAST snapshots](results/upsert-study.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45757575190)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -206,6 +223,12 @@ To time span serialization, SQL execution and commit during those writes, run th
 
 ```sh
 .venv/bin/python phase_study.py --output phase-study.json.gz
+```
+
+To measure the span upsert from both sides of the database connection, run the following with PostgreSQL’s `pg_stat_statements` extension installed. The runner loads it in the disposable benchmark cluster.
+
+```sh
+.venv/bin/python upsert_study.py --output upsert-study.json.gz
 ```
 
 The million-trace study uses the following commands.
