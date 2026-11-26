@@ -2,6 +2,7 @@ __pycache__/
 .venv/
 /driver-study.json.gz
 /chunk-study.json.gz
+/chunk-ingest.json.gz
 /two-step.json.gz
 /two-step-rare.json.gz
 benchmark-result.json

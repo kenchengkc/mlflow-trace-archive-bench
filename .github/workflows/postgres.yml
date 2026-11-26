@@ -28,6 +28,10 @@ on:
         description: Measure the MLflow finder at the 1,000-experiment chunk boundary
         type: boolean
         default: false
+      chunk_ingest:
+        description: Measure selection and trace ingestion together at the experiment chunk boundary
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -58,7 +62,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -77,8 +81,20 @@ jobs:
         if: inputs.driver_study || inputs.two_step_study
         run: python -m unittest -v test_driver_fixture test_two_step
       - name: Check the tied batch across the experiment chunk boundary
-        if: inputs.chunk_study
+        if: inputs.chunk_study || inputs.chunk_ingest
         run: python -m unittest -v test_chunk_study
+      - name: Verify committed ingestion and ordering during a two-chunk read
+        if: inputs.chunk_ingest
+        run: python -m unittest -v test_chunk_writer test_chunk_ingest
+      - name: Run idle, ingestion-only and mixed workloads
+        if: inputs.chunk_ingest
+        run: python chunk_ingest_study.py --output chunk-ingest.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.chunk_ingest
+        with:
+          name: chunk-ingest
+          path: chunk-ingest.json.gz
+          if-no-files-found: error
       - name: Measure MLflow with 1,000 and 1,001 experiments
         if: inputs.chunk_study
         run: python chunk_study.py --output chunk-study.json.gz >> "$GITHUB_STEP_SUMMARY"
