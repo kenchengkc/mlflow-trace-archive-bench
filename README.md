@@ -119,6 +119,26 @@ Each trial started with the same 101,101 eligible traces. The writer committed 5
 
 Six rounds balanced the workload and payload order. The table reports the median of six trial rates and six per-trial median finder latencies, counting only complete selections inside the write interval. A separate session verified all 27,648 measured writes and their payloads. All 28,949 finder calls in the mixed trials returned the expected 100 traces in order. [Raw timings and stored byte counts](results/payload-study.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45743470444)
 
+### Where the 64 KiB write time goes
+
+**Writing the span row was the largest repeatable cost.** With 1,000 and 1,001 selected experiments, that one SQL statement took an extra **1.509 and 1.542 ms per trace**, respectively. Encoding the span dictionary as JSON added **0.585 and 0.595 ms**. Both steps took longer in all eight rounds at each experiment count. The other five SQL writes together added about 0.02 ms per trace.
+
+All times below are arithmetic means in **milliseconds per committed trace**. Each trial ingested the same 512 single-span traces while MLflow’s archival finder ran on a separate connection. The small and larger spans contained 399 and 65,964 bytes of serialized JSON, respectively.
+
+| Mean writer time per trace | 1,000 experiments, small → +64 KiB | Change | 1,001 experiments, small → +64 KiB | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Build the input span | 0.059 → 0.162 | +0.103 | 0.059 → 0.164 | +0.105 |
+| Serialize the span for storage | 0.107 → 0.698 | +0.591 | 0.106 → 0.709 | +0.602 |
+| Execute SQL writes | 1.008 → 2.539 | +1.531 | 1.017 → 2.578 | +1.561 |
+| Commit | 2.016 → 1.708 | −0.308 | 1.673 → 2.267 | +0.593 |
+| Other SQL and application time | 5.822 → 5.848 | +0.025 | 5.679 → 5.956 | +0.277 |
+| Total | 9.013 → 10.954 | +1.941 | 8.534 → 11.673 | +3.140 |
+| Total without phase timers | 8.036 → 11.129 | +3.093 | 8.080 → 10.669 | +2.589 |
+
+Span construction includes encoding the incoming attribute. Storage serialization covers MLflow’s conversion to a dictionary and its JSON encoder. SQL writes measure time in the database driver, including parameter handling and PostgreSQL execution. Commit covers both driver calls per trace, one for the experiment lookup and one for the write transaction. [MLflow storage path](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L5822-L6150) · [Timer boundaries](ingest_phases.py)
+
+Commit time rose in some rounds and fell in others at both experiment counts, with synchronous commit enabled. Without phase timers, larger spans reduced throughput by **27.8% and 24.3%**, respectively. The estimates of added end-to-end time with and without timers differed by 1.15 and 0.55 ms per trace. All 32,768 measured writes passed readback checks, and all 63,248 finder calls in the mixed trials returned the expected ordered batch. [Per-trace samples](results/phase-study.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45745858658)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -180,6 +200,12 @@ To compare incoming span sizes at a fixed trace count, run the payload study in 
 
 ```sh
 .venv/bin/python payload_study.py --output payload-study.json.gz
+```
+
+To time span serialization, SQL execution and commit during those writes, run the small-span and 64 KiB comparison.
+
+```sh
+.venv/bin/python phase_study.py --output phase-study.json.gz
 ```
 
 The million-trace study uses the following commands.
