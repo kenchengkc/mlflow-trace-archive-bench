@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>MLflow Trace Archival Benchmark | PostgreSQL study guides</title>
+  <meta name="description" content="Reproduce PostgreSQL benchmarks for MLflow trace archival. Compare query plans, verify the order of selected traces, and measure concurrent trace ingestion.">
+  <link rel="canonical" href="https://kenchengkc.github.io/mlflow-trace-archive-bench/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="MLflow Trace Archival Benchmark">
+  <meta property="og:description" content="See how archival depth and incoming spans affect MLflow’s PostgreSQL tracking store. Explore the measurements and run the benchmarks.">
+  <meta property="og:url" content="https://kenchengkc.github.io/mlflow-trace-archive-bench/">
+  <meta property="og:image" content="https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/query-latency.png">
+  <meta property="og:image:alt" content="Median query times for a fresh queue and a 95% archived queue on one million synthetic traces.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header>
+    <nav class="container" aria-label="Documentation">
+      <a href="#quick-start">Quick start</a>
+      <a href="#study-guides">Study guides</a>
+      <a class="repository" href="https://github.com/kenchengkc/mlflow-trace-archive-bench">GitHub repository</a>
+    </nav>
+  </header>
+  <main id="main" class="container">
+    <h1>MLflow Trace Archival Benchmark</h1>
+    <p class="intro">Compare how PostgreSQL finds the oldest eligible traces for MLflow to archive, and verify that each query selects the same batch in the same order.</p>
+
+    <section id="quick-start" aria-labelledby="quick-heading">
+      <h2 id="quick-heading">Quick start</h2>
+      <p>Inspect the <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/strategy-study/million-late.json.gz">saved million-trace result</a> with Git and Python 3.10 or newer. The report reader uses only the standard library.</p>
+      <pre tabindex="0" aria-label="Shell commands to read the saved report"><code>git clone https://github.com/kenchengkc/mlflow-trace-archive-bench.git
+cd mlflow-trace-archive-bench
+python3 summarize.py results/strategy-study/million-late.json.gz --with-planning</code></pre>
+    </section>
+
+    <section aria-labelledby="queue-heading">
+      <h2 id="queue-heading">How archive depth changes selection time</h2>
+      <p>On one million synthetic traces, the global SQL query selected 100 traces in <strong>1.24 ms</strong> on a fresh queue. After the oldest 95% of eligible traces were archived, it took <strong>1,315.50 ms</strong>. A query that checked a short prefix before falling back to a full search took <strong>284.59 ms</strong> on that late batch.</p>
+      <figure>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/query-latency-dark.png">
+          <img width="1692" height="782" src="https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/query-latency.png" alt="The global query was fastest on the fresh queue. The bounded probe was fastest when the oldest 95% of eligible traces had been archived.">
+        </picture>
+        <figcaption>Median planning and execution time over six PostgreSQL 16.16 runs. <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/strategy-study/README.md#what-changed-at-one-million-traces">Timings and query plans</a></figcaption>
+      </figure>
+    </section>
+
+    <section id="study-guides" aria-labelledby="studies-heading">
+      <h2 id="studies-heading">Study guides</h2>
+      <dl class="guides">
+        <div>
+          <dt><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/strategy-study/README.md">SQL query strategies</a></dt>
+          <dd>See why changing which traces were archived changed the fastest query across two queues at the same archive depth.</dd>
+        </div>
+        <div>
+          <dt><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/finder/README.md">MLflow’s candidate finder</a></dt>
+          <dd>Compare the tracking store with raw SQL and check the merged order when 1,001 experiments require a second query.</dd>
+        </div>
+        <div>
+          <dt><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/results/ingestion/README.md">Concurrent trace ingestion</a></dt>
+          <dd>Trace the cost of larger spans through serialization, PostgreSQL writes, commits, and out-of-line storage.</dd>
+        </div>
+      </dl>
+      <p><a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/tree/main/results">Browse raw measurements</a></p>
+    </section>
+  </main>
+  <footer>
+    <nav class="container" aria-label="Project resources">
+      <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/kenchengkc/mlflow-trace-archive-bench/blob/main/LICENSE">Apache License 2.0</a>
+      <a href="llms.txt">llms.txt</a>
+    </nav>
+  </footer>
+</body>
+</html>
