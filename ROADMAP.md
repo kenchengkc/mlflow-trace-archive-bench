@@ -20,6 +20,10 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 **Completed.** With 1,000 selected experiments, one query supplied the entire 100-trace batch. Adding experiment 1,001 made MLflow fetch 100 candidates from each of two queries. On a fixture with tied timestamps across the boundary, 50 rows from each query survived the merge. Swapping the tied experiments between chunks preserved the exact order. [Measurements](README.md#from-1000-to-1001-experiments) · [Boundary test](test_chunk_study.py)
 
+## 5. Select candidates while ingesting traces
+
+**Completed.** The concurrent chunk study measures both sides of the workload against finder-only and writer-only controls. A forced between-query commit also exercises the case where a new trace already meets the archival cutoff. [Latency and throughput](README.md#selection-during-trace-ingestion) · [Live ordering test](test_chunk_ingest.py)
+
 ## What earns the next experiment
 
-Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. Concurrent ingestion and larger spans are separate follow-ups if measurements point there. [Operator report](https://github.com/mlflow/mlflow/issues/24895)
+Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. Larger spans remain a separate follow-up. [Operator report](https://github.com/mlflow/mlflow/issues/24895)

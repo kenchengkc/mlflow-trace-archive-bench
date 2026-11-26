@@ -88,6 +88,23 @@ Experiments 1,000 and 1,001 had traces with identical timestamps on either side 
 
 Timings cover 12 complete transactions per scope on one warm connection, alternating which scope ran first. The untimed query captures and replays verified the IDs, limits and row counts for each SELECT. [Raw samples, ordered rows and plans](results/chunk-study.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45676900586)
 
+### Selection during trace ingestion
+
+A separate writer process committed one completed, single-span trace per call to MLflow’s `log_spans`, alternating between experiments 1,000 and 1,001. Incoming timestamps were newer than the archival cutoff. The expected oldest 100 traces therefore stayed fixed while the finder and writer used the same database. [Writer](chunk_ingest.py) · [MLflow ingestion path](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L5802-L5823)
+
+With both processes active, **selection took about 16% longer and ingestion throughput fell about 13%** at both experiment counts. The writer alone committed **126.95 traces/s**. Percentage changes use the finder-only and writer-only controls measured in this run.
+
+| Selected experiments | Finder alone (ms) | Finder with writer (ms) | Writer with finder (traces/s) |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 4.98 | 5.77 (+15.8%) | 110.20 (−13.2%) |
+| 1,001 | 6.53 | 7.58 (+16.0%) | 110.56 (−12.9%) |
+
+Five rounds rotated the workload order, each trial starting from a fresh copy of the 101,101-trace fixture. Finder latency is the median of the five per-trial transaction medians. For concurrent latency, only complete finder calls inside the writer’s measured interval counted. Throughput is the median of five rates, each measured over 512 committed traces. [Raw transaction intervals and write acknowledgments](results/chunk-ingest.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45740632341)
+
+All **6,761 finder calls** in the mixed trials returned the same ordered 100 traces as the idle controls, including ties across the chunk boundary. A separate session verified the committed trace header and root span for all 7,680 measured writes.
+
+An ordering test made two backdated traces eligible in **one commit between the two SELECTs**. The in-flight batch saw only the arrival in the unread chunk. The next finder call saw both. Each batch matched its expected timestamp and trace-ID order. PostgreSQL’s default read-committed isolation gives each SELECT its own snapshot. [Ordering test](test_chunk_ingest.py) · [PostgreSQL snapshot rules](https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -137,6 +154,12 @@ To compare 1,000 and 1,001 selected experiments on the same database and verify 
 
 ```sh
 .venv/bin/python chunk_study.py --output chunk-study.json.gz
+```
+
+To repeat the same comparison with a concurrent trace writer, run the ingestion study. It also measures the finder alone and the writer alone on the same starting fixture.
+
+```sh
+.venv/bin/python chunk_ingest_study.py --output chunk-ingest.json.gz
 ```
 
 The million-trace study uses the following commands.
