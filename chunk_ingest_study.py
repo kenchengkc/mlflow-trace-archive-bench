@@ -1,7 +1,7 @@
 """Measure MLflow's experiment-chunk finder while a separate process commits new traces."""
 import argparse
 from bisect import bisect_left
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import gzip
 from importlib.metadata import version
 import json
@@ -34,7 +34,7 @@ def writer_worker(pipe):
 
     try:
         while (job := pipe.recv()) is not None:
-            uri, count, padding_bytes = job
+            uri, count, padding_bytes, profiled = job
             # Generating the deterministic attribute text is fixture setup. Span
             # construction, serialization and log_spans remain inside the timer.
             if padding_bytes:
@@ -49,9 +49,14 @@ def writer_worker(pipe):
                     pids.add(connection.get_backend_pid())
 
                 # MLflow may use multiple physical connections within log_spans.
-                # Track pool creation, without intercepting individual writes.
+                # Track pool creation on all trials.
                 event.listen(store.engine, "connect", record_backend)
-                try:
+                with ExitStack() as stack:
+                    stack.callback(event.remove, store.engine, "connect", record_backend)
+                    recorder = None
+                    if profiled:
+                        from ingest_phases import capture_writer_phases
+                        recorder = stack.enter_context(capture_writer_phases(store.engine))
                     warm_payload = payload_text(2, 0, padding_bytes) if padding_bytes else None
                     write_trace(store, 2, 0, warm_payload)
                     pipe.send(("ready", sorted(pids)))
@@ -59,12 +64,17 @@ def writer_worker(pipe):
                         raise RuntimeError("Writer did not receive its start signal")
                     acknowledged = []
                     started = perf_counter_ns()
-                    for index, payload in enumerate(payloads):
-                        write_trace(store, 1, index, payload)
-                        acknowledged.append(perf_counter_ns())
-                finally:
-                    event.remove(store.engine, "connect", record_backend)
-            pipe.send(("done", (started, acknowledged, sorted(pids))))
+                    if recorder is None:
+                        for index, payload in enumerate(payloads):
+                            write_trace(store, 1, index, payload)
+                            acknowledged.append(perf_counter_ns())
+                    else:
+                        for index, payload in enumerate(payloads):
+                            with recorder.trace():
+                                write_trace(store, 1, index, payload)
+                            acknowledged.append(perf_counter_ns())
+            samples = recorder.samples if recorder is not None else None
+            pipe.send(("done", (started, acknowledged, sorted(pids), samples)))
     except Exception:
         pipe.send(("error", traceback.format_exc()))
     finally:
@@ -117,11 +127,12 @@ def db_sql(sql, name):
     return execute
 
 
-def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, padding_bytes=None):
+def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, padding_bytes=None,
+                  profiled=None):
     size = None if mode == "writer_only" else int(mode.split("_")[1])
     mixed = mode.startswith("mixed")
     count = traces if mixed or size is None else 0
-    pipe.send((uri, count, padding_bytes))
+    pipe.send((uri, count, padding_bytes, profiled))
     writer_pids = receive(pipe, "ready")
     with open_store(uri) as store:
         store.engine.dispose()
@@ -145,7 +156,7 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
                 for _ in range(idle_calls):
                     intervals.append(select_once(store, scopes[size], expected[size], reader_pid))
         if count:
-            started, commits, writer_pids = receive(pipe, "done")
+            started, commits, writer_pids, samples = receive(pipe, "done")
             if reader_pid in writer_pids:
                 raise RuntimeError("Writer and finder shared a backend")
         else:
@@ -154,11 +165,15 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
     if len(commits) != count:
         raise RuntimeError("Writer acknowledgement count differs from the requested workload")
     result = {"mode": mode, "writer": None, "finder": None}
+    if profiled is not None:
+        result["profiled"] = profiled
     if count:
         duration = commits[-1] - started
         result["writer"] = {"backend_pids": writer_pids, "elapsed_ns": duration,
                             "commit_offsets_ns": [t - started for t in commits],
                             "traces_per_second": count * 1e9 / duration, **stored}
+        if profiled:
+            result["writer"]["phase_samples"] = samples
     if size is not None:
         measured = [(a, b) for a, b in intervals if not mixed or started <= a <= b <= commits[-1]]
         if not measured:
@@ -175,7 +190,7 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, pa
     return result
 
 
-def run_trials(schedule, traces, idle_calls, study_settings):
+def run_trials(schedule, traces, idle_calls, study_settings, *, record_durability=False):
     """Give every scheduled trial a fresh clone of the same verified fixture."""
     from sqlalchemy.engine import make_url
 
@@ -201,11 +216,16 @@ def run_trials(schedule, traces, idle_calls, study_settings):
             "scopes": {n: {k: c[k] for k in ("query_count", "result_sha256", "first_excluded", "ordered_rows")}
                        for n, c in checks.items()}, "trials": [],
         }
+        if record_durability:
+            report["postgres_settings"].update(json.loads(seed_sql("""
+                SELECT json_object_agg(name, current_setting(name)) FROM pg_settings
+                WHERE name IN ('fsync', 'synchronous_commit', 'full_page_writes', 'wal_sync_method');
+            """)))
         trial_uri = url.set(database="ingest_trial").render_as_string(hide_password=False)
-        for round_no, mode, padding_bytes in schedule:
+        for round_no, mode, padding_bytes, *profile_option in schedule:
             sql("CREATE DATABASE ingest_trial TEMPLATE ingest_seed")
             trial = measure_trial(trial_uri, db_sql(sql, "ingest_trial"), pipe, mode, scopes,
-                                  expected, traces, idle_calls, padding_bytes)
+                                  expected, traces, idle_calls, padding_bytes, *profile_option)
             if padding_bytes is not None:
                 trial["padding_bytes"] = padding_bytes
             report["trials"].append({"round": round_no, **trial})

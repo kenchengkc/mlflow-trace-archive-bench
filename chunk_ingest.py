@@ -17,8 +17,8 @@ def payload_text(series: int, index: int, payload_bytes: int) -> str | None:
     return b64encode(data)[:payload_bytes].decode("ascii")
 
 
-def write_trace(store, series: int, index: int, payload: str | None = None) -> None:
-    """Return after log_spans commits a new trace in experiment 1000 or 1001."""
+def build_span(series: int, index: int, payload: str | None):
+    """Build the single completed span, including its JSON-encoded attribute values."""
     from mlflow.entities import Span
     from mlflow.tracing.constant import SpanAttributeKey
 
@@ -29,7 +29,7 @@ def write_trace(store, series: int, index: int, payload: str | None = None) -> N
     attributes = {SpanAttributeKey.REQUEST_ID: json.dumps("tr-" + trace_hex)}
     if payload is not None:
         attributes["benchmark.payload"] = json.dumps(payload)
-    span = Span.from_dict({
+    return Span.from_dict({
         "name": "ingestion-root",
         "trace_id": b64encode(bytes.fromhex(trace_hex)).decode("ascii"),
         "span_id": "AAAAAAAAAAE=",  # The eight-byte span ID 1, scoped to this trace.
@@ -39,6 +39,11 @@ def write_trace(store, series: int, index: int, payload: str | None = None) -> N
         "end_time_unix_nano": (timestamp_ms + 1) * 1_000_000,
         "status": {"code": "STATUS_CODE_OK"},
     })
+
+
+def write_trace(store, series: int, index: int, payload: str | None = None) -> None:
+    """Return after log_spans commits a new trace in experiment 1000 or 1001."""
+    span = build_span(series, index, payload)
     store.log_spans(str(1000 + index % 2), [span])
 
 
