@@ -32,6 +32,10 @@ on:
         description: Measure selection and trace ingestion together at the experiment chunk boundary
         type: boolean
         default: false
+      payload_study:
+        description: Compare small, 16 KiB and 64 KiB incoming span payloads
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -62,7 +66,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -84,8 +88,20 @@ jobs:
         if: inputs.chunk_study || inputs.chunk_ingest
         run: python -m unittest -v test_chunk_study
       - name: Verify committed ingestion and ordering during a two-chunk read
-        if: inputs.chunk_ingest
+        if: inputs.chunk_ingest || inputs.payload_study
         run: python -m unittest -v test_chunk_writer test_chunk_ingest
+      - name: Verify the payload comparison
+        if: inputs.payload_study
+        run: python -m unittest -v test_payload_study
+      - name: Measure selection latency and ingestion throughput by payload size
+        if: inputs.payload_study
+        run: python payload_study.py --output payload-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.payload_study
+        with:
+          name: payload-study
+          path: payload-study.json.gz
+          if-no-files-found: error
       - name: Run idle, ingestion-only and mixed workloads
         if: inputs.chunk_ingest
         run: python chunk_ingest_study.py --output chunk-ingest.json.gz >> "$GITHUB_STEP_SUMMARY"

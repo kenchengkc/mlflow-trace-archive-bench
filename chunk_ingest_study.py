@@ -14,7 +14,7 @@ import traceback
 
 from benchmark import positive_int, postgres_settings
 from chunk_fixture import BATCH_SIZE, CUTOFF, prepare_chunk_fixture
-from chunk_ingest import verify_ingested, write_trace
+from chunk_ingest import payload_text, verify_ingested, write_trace
 from chunk_study import candidate_rows, verify_scope
 from local_postgres import local_database
 from mlflow_driver import MLFLOW_REVISION, find_candidates, open_store
@@ -34,7 +34,13 @@ def writer_worker(pipe):
 
     try:
         while (job := pipe.recv()) is not None:
-            uri, count = job
+            uri, count, padding_bytes = job
+            # Generating the deterministic attribute text is fixture setup. Span
+            # construction, serialization and log_spans remain inside the timer.
+            if padding_bytes:
+                payloads = [payload_text(1, index, padding_bytes) for index in range(count)]
+            else:
+                payloads = [None] * count
             with open_store(uri) as store:
                 store.engine.dispose()
                 pids = set()
@@ -46,14 +52,15 @@ def writer_worker(pipe):
                 # Track pool creation, without intercepting individual writes.
                 event.listen(store.engine, "connect", record_backend)
                 try:
-                    write_trace(store, 2, 0)  # Identical warm-up on all five arms, including idle.
+                    warm_payload = payload_text(2, 0, padding_bytes) if padding_bytes else None
+                    write_trace(store, 2, 0, warm_payload)
                     pipe.send(("ready", sorted(pids)))
                     if pipe.recv() != "go":
                         raise RuntimeError("Writer did not receive its start signal")
                     acknowledged = []
                     started = perf_counter_ns()
-                    for index in range(count):
-                        write_trace(store, 1, index)
+                    for index, payload in enumerate(payloads):
+                        write_trace(store, 1, index, payload)
                         acknowledged.append(perf_counter_ns())
                 finally:
                     event.remove(store.engine, "connect", record_backend)
@@ -110,11 +117,11 @@ def db_sql(sql, name):
     return execute
 
 
-def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls):
+def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls, padding_bytes=None):
     size = None if mode == "writer_only" else int(mode.split("_")[1])
     mixed = mode.startswith("mixed")
     count = traces if mixed or size is None else 0
-    pipe.send((uri, count))
+    pipe.send((uri, count, padding_bytes))
     writer_pids = receive(pipe, "ready")
     with open_store(uri) as store:
         store.engine.dispose()
@@ -143,7 +150,7 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls):
                 raise RuntimeError("Writer and finder shared a backend")
         else:
             started, commits = intervals[0][0], []
-    stored = verify_ingested(sql, 1, count)
+    stored = verify_ingested(sql, 1, count, payload_bytes=padding_bytes)
     if len(commits) != count:
         raise RuntimeError("Writer acknowledgement count differs from the requested workload")
     result = {"mode": mode, "writer": None, "finder": None}
@@ -168,11 +175,12 @@ def measure_trial(uri, sql, pipe, mode, scopes, expected, traces, idle_calls):
     return result
 
 
-def run(rounds=5, traces=512, idle_calls=256):
+def run_trials(schedule, traces, idle_calls, study_settings):
+    """Give every scheduled trial a fresh clone of the same verified fixture."""
     from sqlalchemy.engine import make_url
 
-    if min(rounds, idle_calls) < 1 or traces < 2:
-        raise ValueError("Use positive rounds and idle calls, and at least two ingested traces")
+    if traces < 2:
+        raise ValueError("Use at least two ingested traces per writer trial")
     scopes = {size: list(map(str, range(1, size+1))) for size in SIZES}
     with local_database() as (sql, uri), writer_process() as pipe:
         url = make_url(uri)
@@ -188,22 +196,32 @@ def run(rounds=5, traces=512, idle_calls=256):
             "system": platform.system(), "architecture": platform.machine(), "fixture": fixture,
             "postgres_settings": postgres_settings(seed_sql),
             "alembic_revision": seed_sql("SELECT version_num FROM alembic_version"),
-            "round_count": rounds, "traces_per_writer_trial": traces, "idle_calls_per_trial": idle_calls,
+            **study_settings, "traces_per_writer_trial": traces,
             "cutoff_ms": CUTOFF, "batch_size": BATCH_SIZE,
             "scopes": {n: {k: c[k] for k in ("query_count", "result_sha256", "first_excluded", "ordered_rows")}
                        for n, c in checks.items()}, "trials": [],
         }
         trial_uri = url.set(database="ingest_trial").render_as_string(hide_password=False)
-        for round_no in range(rounds):
-            offset = round_no % len(MODES)
-            for mode in MODES[offset:] + MODES[:offset]:
-                # PostgreSQL copies the same tables, indexes and planner statistics into every arm.
-                sql("CREATE DATABASE ingest_trial TEMPLATE ingest_seed")
-                trial = measure_trial(trial_uri, db_sql(sql, "ingest_trial"), pipe, mode, scopes,
-                                      expected, traces, idle_calls)
-                report["trials"].append({"round": round_no + 1, **trial})
-                sql("DROP DATABASE ingest_trial")
+        for round_no, mode, padding_bytes in schedule:
+            sql("CREATE DATABASE ingest_trial TEMPLATE ingest_seed")
+            trial = measure_trial(trial_uri, db_sql(sql, "ingest_trial"), pipe, mode, scopes,
+                                  expected, traces, idle_calls, padding_bytes)
+            if padding_bytes is not None:
+                trial["padding_bytes"] = padding_bytes
+            report["trials"].append({"round": round_no, **trial})
+            sql("DROP DATABASE ingest_trial")
     return report
+
+
+def run(rounds=5, traces=512, idle_calls=256):
+    if min(rounds, idle_calls) < 1:
+        raise ValueError("Use positive rounds and idle calls")
+    schedule = []
+    for round_no in range(rounds):
+        offset = round_no % len(MODES)
+        schedule.extend((round_no + 1, mode, None) for mode in MODES[offset:] + MODES[:offset])
+    return run_trials(schedule, traces, idle_calls,
+                      {"round_count": rounds, "idle_calls_per_trial": idle_calls})
 
 
 def main():

@@ -3,6 +3,7 @@ __pycache__/
 /driver-study.json.gz
 /chunk-study.json.gz
 /chunk-ingest.json.gz
+/payload-study.json.gz
 /two-step.json.gz
 /two-step-rare.json.gz
 benchmark-result.json
