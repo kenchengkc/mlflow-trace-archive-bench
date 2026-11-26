@@ -1,21 +1,22 @@
 # MLflow Trace Archival Benchmark
 
-> An independent PostgreSQL benchmark for MLflow trace archival. It measures the cost of selecting eligible traces and the cost of ingesting new spans while selection runs, and checks trace IDs and ordering on synthetic workloads.
+> This independent benchmark measures how long PostgreSQL takes to select traces for MLflow to archive. It checks the order of trace IDs and measures how concurrent span writes affect selection and ingestion.
 
-The SQL study measures database planning and execution on a reduced schema. The finder and ingestion studies use the pinned MLflow 3.18.0 SQLAlchemy store on migrated tables. Use each study’s timing definition and workload description when comparing results.
+The SQL study uses a reduced schema and measures server planning and execution time. The finder and ingestion studies run MLflow 3.18.0 against tables created by its migrations and measure complete selection transactions.
 
-## Start here
+## Get started
 
-- [Project overview and quick start](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/README.md): Read a published report with Python or run a small local SQL benchmark.
-- [Contribution guide](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/CONTRIBUTING.md): Set up PostgreSQL, run tests, and report a reproducible comparison.
+- [Read a saved report](https://kenchengkc.github.io/mlflow-trace-archive-bench/#quick-start): Inspect the million-trace run with Git and Python 3.10 or later.
+- [Run a local benchmark](https://kenchengkc.github.io/mlflow-trace-archive-bench/#local-benchmark): Compare three queries on two 1,000-trace PostgreSQL queues.
+- [Contribute](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/CONTRIBUTING.md): Install PostgreSQL, run the tests, and report a result.
 
-## Benchmark studies
+## Study guides
 
-- [SQL query strategies](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/README.md): Compare global ordering, per-experiment selection, and a bounded probe across archive layouts.
-- [MLflow’s candidate finder](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/finder/README.md): Compare driver and SQL timings, deferred fallback, and merging at 1,001 experiments.
-- [Concurrent trace ingestion](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/ingestion/README.md): Compare selection latency and write throughput, serialization, PostgreSQL execution, write-ahead logging, and out-of-line span storage.
+- [SQL query strategies](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/README.md): Compare the global query, the per-experiment query, and the bounded probe on different archive layouts.
+- [MLflow’s candidate finder](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/finder/README.md): Compare raw SQL and driver timings. Check query counts and trace order at 1,000 and 1,001 experiments.
+- [Concurrent trace ingestion](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/ingestion/README.md): Compare selection latency and ingestion throughput. Follow a span write through serialization, database execution, and commit.
 
 ## Optional
 
-- [Full 45-case SQL timing table](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/matrix.md): Compare published timings by experiment scope, batch size, and archive depth.
-- [Machine-readable results](https://github.com/kenchengkc/mlflow-trace-archive-bench/tree/main/results): Compressed JSON measurements, query plans, and ordering checks.
+- [SQL timing table](https://raw.githubusercontent.com/kenchengkc/mlflow-trace-archive-bench/main/results/strategy-study/matrix.md): Compare all 45 combinations of experiment scope, batch size, and archive depth.
+- [Raw results](https://github.com/kenchengkc/mlflow-trace-archive-bench/tree/main/results): Read the compressed JSON measurements, query plans, and ordering checks.
