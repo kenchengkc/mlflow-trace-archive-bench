@@ -105,6 +105,20 @@ All **6,761 finder calls** in the mixed trials returned the same ordered 100 tra
 
 An ordering test made two backdated traces eligible in **one commit between the two SELECTs**. The in-flight batch saw only the arrival in the unread chunk. The next finder call saw both. Each batch matched its expected timestamp and trace-ID order. PostgreSQL’s default read-committed isolation gives each SELECT its own snapshot. [Ordering test](test_chunk_ingest.py) · [PostgreSQL snapshot rules](https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED)
 
+### Larger incoming spans
+
+Adding **64 KiB per incoming span reduced ingestion throughput by about 25%** at both experiment counts. The writer slowed in every round. Finder latency moved in both directions across rounds. Percentages compare each workload with its own small-span control rerun on the same machine.
+
+| Added per span | Finder, 1,000 (ms) | Writer, 1,000 (traces/s) | Finder, 1,001 (ms) | Writer, 1,001 (traces/s) |
+| --- | ---: | ---: | ---: | ---: |
+| Small control | 4.22 | 143.31 | 5.50 | 142.23 |
+| 16 KiB | 4.03 (−4.6%) | 133.53 (−6.8%) | 5.90 (+7.3%) | 128.82 (−9.4%) |
+| 64 KiB | 4.10 (−3.0%) | 107.45 (−25.0%) | 5.52 (+0.5%) | 105.97 (−25.5%) |
+
+Each trial started with the same 101,101 eligible traces. The writer committed 512 single-span traces with timestamps newer than the archival cutoff. One synthetic text attribute increased the serialized span from 399 bytes to 16,812 or 65,964 bytes. We generated the text before timing and measured MLflow 3.18.0’s span construction, serialization and commit. With the writer alone, throughput fell from 167.02 traces/s to 151.17 and 118.60 traces/s, respectively.
+
+Six rounds balanced the workload and payload order. The table reports the median of six trial rates and six per-trial median finder latencies, counting only complete selections inside the write interval. A separate session verified all 27,648 measured writes and their payloads. All 28,949 finder calls in the mixed trials returned the expected 100 traces in order. [Raw timings and stored byte counts](results/payload-study.json.gz) · [PostgreSQL 16.16 run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45743470444)
+
 ## Quick start
 
 Inspect the saved measurements with Git and Python 3.10+. The report reader uses only the standard library. This example selects the 100,000-trace workload with a batch limit of 100, 95% already archived, and only the rare experiment (ID 8).
@@ -160,6 +174,12 @@ To repeat the same comparison with a concurrent trace writer, run the ingestion 
 
 ```sh
 .venv/bin/python chunk_ingest_study.py --output chunk-ingest.json.gz
+```
+
+To compare incoming span sizes at a fixed trace count, run the payload study in the same environment.
+
+```sh
+.venv/bin/python payload_study.py --output payload-study.json.gz
 ```
 
 The million-trace study uses the following commands.

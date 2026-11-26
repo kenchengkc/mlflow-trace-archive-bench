@@ -24,6 +24,10 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 **Completed.** The concurrent chunk study measures both sides of the workload against finder-only and writer-only controls. A forced between-query commit also exercises the case where a new trace already meets the archival cutoff. [Latency and throughput](README.md#selection-during-trace-ingestion) · [Live ordering test](test_chunk_ingest.py)
 
+## 6. Vary incoming span size at a fixed trace count
+
+**Completed.** Adding 64 KiB to each incoming span reduced concurrent ingestion throughput by about 25% on both sides of the experiment chunk boundary. The finder returned the same ordered batches at every payload size. [Measurements](README.md#larger-incoming-spans) · [Benchmark code](payload_study.py)
+
 ## What earns the next experiment
 
-Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. Larger spans remain a separate follow-up. [Operator report](https://github.com/mlflow/mlflow/issues/24895)
+Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. [Operator report](https://github.com/mlflow/mlflow/issues/24895)
