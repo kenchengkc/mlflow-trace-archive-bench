@@ -2,6 +2,7 @@ __pycache__/
 .venv/
 /driver-study.json.gz
 /drain-study.json.gz
+/drain-phase-study.json.gz
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz

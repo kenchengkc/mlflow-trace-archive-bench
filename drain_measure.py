@@ -1,14 +1,60 @@
 """Measure each real MLflow archival pass, including the first empty pass."""
 
+from contextlib import ExitStack
 from time import perf_counter_ns
 from unittest.mock import patch
 
 
 BATCH_SIZE = 3
 RETENTION = "1d"
+PHASES = ("span_load", "serialization", "artifact_write", "db_finalize")
 
 
-def measure_drain(store, archive_uri: str, expected_ids) -> list[dict]:
+def _time_phase(name, call, intervals):
+    def timed(*args, **kwargs):
+        start = perf_counter_ns()
+        try:
+            return call(*args, **kwargs)
+        finally:
+            intervals.append((name, start, perf_counter_ns()))
+    return timed
+
+
+def _install_phase_timers(stack, store, intervals):
+    from mlflow.store.artifact.local_artifact_repo import LocalArtifactRepository
+
+    # MLflow constructs a new repository per trace. Patch the local backend only;
+    # its real upload method stages the protobuf and copies it to the archive.
+    for phase, owner, method in (
+        ("span_load", store, "_load_trace_archival_data"),
+        ("serialization", store, "_serialize_trace_archival_span_rows_to_pb"),
+        ("artifact_write", LocalArtifactRepository, "upload_archived_trace_data_bytes"),
+        ("db_finalize", store, "_finalize_archived_trace"),
+    ):
+        wrapped = _time_phase(phase, getattr(owner, method), intervals)
+        stack.enter_context(patch.object(owner, method, new=wrapped))
+
+
+def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns):
+    # This pinned path performs all four calls sequentially for each successful trace.
+    if [name for name, _, _ in intervals] != list(PHASES) * count:
+        raise RuntimeError("Unexpected archival phase order or call count")
+    previous_end = selection_end
+    elapsed = dict.fromkeys(PHASES, 0)
+    calls = dict.fromkeys(PHASES, 0)
+    for name, start, end in intervals:
+        if not previous_end <= start <= end <= pass_end:
+            raise RuntimeError("Archival phase intervals overlap or fall outside the pass")
+        elapsed[name] += end - start
+        calls[name] += 1
+        previous_end = end
+    elapsed["other"] = total_ns - selection_ns - sum(elapsed.values())
+    if elapsed["other"] < 0:
+        raise RuntimeError("Measured archival phases exceed the complete pass")
+    return {"phase_ms": {key: ns / 1e6 for key, ns in elapsed.items()}, "phase_calls": calls}
+
+
+def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -22,9 +68,9 @@ def measure_drain(store, archive_uri: str, expected_ids) -> list[dict]:
     def timed_plan(**kwargs):
         started = perf_counter_ns()
         result = plan(**kwargs)
-        elapsed = perf_counter_ns() - started
+        ended = perf_counter_ns()
         # Capture the returned list by reference. Inspect its IDs outside the pass timer.
-        plans.append((elapsed, result[1]))
+        plans.append((ended - started, ended, result[1]))
         return result
 
     def observe_archive(*, trace_id, resolved_trace_archival_location):
@@ -37,25 +83,29 @@ def measure_drain(store, archive_uri: str, expected_ids) -> list[dict]:
 
     rows = []
     offset = 0
-    with (
-        patch.object(store, "_plan_trace_archival", new=timed_plan),
-        patch.object(store, "_archive_trace_candidate", new=observe_archive),
-    ):
+    intervals = []
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(store, "_plan_trace_archival", new=timed_plan))
+        stack.enter_context(patch.object(store, "_archive_trace_candidate", new=observe_archive))
+        if profile_phases:
+            _install_phase_timers(stack, store, intervals)
         while True:
             plans.clear()
             successful.clear()
+            intervals.clear()
             started = perf_counter_ns()
             count = store.archive_traces(
                 resolved_trace_archival_location=archive_uri,
                 broader_retention=RETENTION,
                 max_traces_per_pass=BATCH_SIZE,
             )
-            total_ns = perf_counter_ns() - started
+            ended = perf_counter_ns()
+            total_ns = ended - started
 
             pass_number = len(rows) + 1
             if len(plans) != 1:
                 raise RuntimeError(f"Pass {pass_number} called the selection planner {len(plans)} times")
-            selection_ns, candidates = plans[0]
+            selection_ns, selection_end, candidates = plans[0]
             selected = [candidate.trace_id for candidate in candidates]
             expected = expected_ids[offset:offset + BATCH_SIZE]
             if selected != expected or successful != expected or count != len(expected):
@@ -63,10 +113,13 @@ def measure_drain(store, archive_uri: str, expected_ids) -> list[dict]:
                     f"Pass {pass_number}: expected {expected}, selected {selected}, "
                     f"archived {successful}, store returned {count}"
                 )
-            rows.append({
+            row = {
                 "pass_number": pass_number, "archived_count": count, "selected_ids": selected,
                 "selection_ms": selection_ns / 1e6, "total_ms": total_ns / 1e6,
-            })
+            }
+            if profile_phases:
+                row.update(_phase_row(intervals, count, selection_end, selection_ns, ended, total_ns))
+            rows.append(row)
             if count == 0:
                 return rows
             offset += count
