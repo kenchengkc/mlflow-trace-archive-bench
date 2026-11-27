@@ -11,6 +11,23 @@ from mlflow_driver import MLFLOW_VERSION, open_store
 from test_driver_fixture import installed_mlflow
 
 
+class OrmAttributionTest(unittest.TestCase):
+    def test_nested_orm_and_driver_calls_share_no_time(self):
+        from finalize_probe import split_orm_time
+
+        windows = [(0, 60), (100, 160)]
+        # Hooks record intervals on return. Include an ORM call nested in the same
+        # category, a driver call outside the hooks, and one spanning adjacent hooks.
+        orm = [(12, 18, "fetch"), (20, 26, "fetch"), (10, 40, "objects"), (4, 50, "session"),
+               (107, 112, "objects"), (105, 120, "objects"), (125, 145, "session"), (145, 149, "fetch")]
+        driver = [(1, 3, "sql"), (14, 17, "sql"), (30, 33, "sql"), (45, 49, "commit"),
+                  (143, 148, "sql")]
+        result = split_orm_time(windows, orm, driver)
+        self.assertEqual(result["calls"], {"fetch": 3, "objects": 3, "session": 2})
+        self.assertEqual({name: round(ms * 1e6) for name, ms in result["ms"].items()},
+                         {"fetch": 10, "objects": 30, "session": 30, "other": 33})
+
+
 @unittest.skipUnless(installed_mlflow == MLFLOW_VERSION and find_spec("psycopg2"),
                      "requires the driver study's MLflow and psycopg2 dependencies")
 class DrainStudyTest(unittest.TestCase):
@@ -79,6 +96,8 @@ class DrainStudyTest(unittest.TestCase):
             self.assertEqual(suffixes, [[2, 3, 4], [5, 1], []])
             for row, count in zip(passes, (3, 2, 0), strict=True):
                 with self.subTest(pass_number=row["pass_number"]):
+                    self.assertNotIn("orm_ms", row)
+                    self.assertNotIn("orm_calls", row)
                     calls = row["finalization_calls"]
                     durations = row["finalization_ms"]
                     expected_calls = dict.fromkeys((
@@ -93,6 +112,38 @@ class DrainStudyTest(unittest.TestCase):
                     self.assertGreaterEqual(durations["other"], 0)
                     self.assertAlmostEqual(sum(durations.values()), row["phase_ms"]["db_finalize"])
             self.assertEqual(verify_readback(store, sql, expected, archive)["spans_read_back"], 10)
+
+    def test_orm_timings_account_for_the_remainder_after_driver_calls(self):
+        categories = {"fetch", "objects", "session"}
+        with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
+            expected = seed_queue(store, 4)
+            archive = Path(tmp).resolve()
+            passes = measure_drain(store, archive.as_uri(), expected, profile_orm=True)
+            ids = [f"tr-d1a1{i:028x}" for i in range(1, 5)]
+            self.assertEqual([row["selected_ids"] for row in passes], [ids[:3], ids[3:], []])
+            for row, count in zip(passes, (3, 1, 0), strict=True):
+                with self.subTest(pass_number=row["pass_number"]):
+                    self.assertEqual(row["archived_count"], count)
+                    # Per trace the pinned path fetches four result sets. Object
+                    # and session counts include nested calls to the timed methods.
+                    self.assertEqual(row["orm_calls"], {
+                        "fetch": 4 * count, "objects": 13 * count, "session": 22 * count,
+                    })
+                    self.assertEqual(set(row["orm_ms"]), categories | {"other"})
+                    durations_ns = {key: round(ms * 1e6) for key, ms in row["orm_ms"].items()}
+                    for key in categories:
+                        if count:
+                            self.assertGreater(durations_ns[key], 0)
+                        else:
+                            self.assertEqual(durations_ns[key], 0)
+                    self.assertGreaterEqual(durations_ns["other"], 0)
+                    if count == 0:
+                        self.assertEqual(durations_ns["other"], 0)
+                    self.assertEqual(sum(durations_ns.values()), round(row["finalization_ms"]["other"] * 1e6))
+            self.assertEqual(verify_readback(store, sql, expected, archive), {
+                "traces_read_back": 4, "spans_read_back": 8,
+                "database_span_payloads_cleared": 8, "archive_files_verified": 4,
+            })
 
 
 if __name__ == "__main__":
