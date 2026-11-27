@@ -40,6 +40,10 @@ on:
         description: Time serialization, database writes and commits for small and 64 KiB spans
         type: boolean
         default: false
+      drain_study:
+        description: Archive three traces per pass until the queue is empty
+        type: boolean
+        default: false
       upsert_study:
         description: Measure PostgreSQL execution, WAL and TOAST for real MLflow span upserts
         type: boolean
@@ -74,7 +78,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -89,6 +93,17 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/driver-env"
           "$RUNNER_TEMP/driver-env/bin/python" -m pip install -r requirements-driver.txt
           echo "$RUNNER_TEMP/driver-env/bin" >> "$GITHUB_PATH"
+      - name: Verify and measure successive three-trace archival passes
+        if: inputs.drain_study
+        run: |
+          python -m unittest -v test_drain_study
+          python drain_study.py --rounds 7 --traces 92 --output drain-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.drain_study
+        with:
+          name: drain-study
+          path: drain-study.json.gz
+          if-no-files-found: error
       - name: Check the migrated fixtures and concurrent writes
         if: inputs.driver_study || inputs.two_step_study
         run: python -m unittest -v test_driver_fixture test_two_step
