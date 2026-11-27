@@ -138,6 +138,32 @@ To reproduce the table, run the driver-only command above for the control, then 
 .venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-orm --output drain-orm.json.gz
 ```
 
+### Building, compiling, and dispatching queries
+
+**Building queries took 1.20 ms per three-trace pass. Generating SQL took 0.028 ms.** SQLAlchemy found a compiled statement on 4,998 of 5,040 lookups across the 210 full passes. Each queue’s first pass issued six compilations. SQL generation accounted for 0.85 ms of previously unassigned time on those first passes and zero on every later pass.
+
+| Work inside the previously unassigned time | Mean ms per full pass | Share |
+| --- | ---: | ---: |
+| Build queries, predicates, loader options, and statement objects | 1.204 | 27.1% |
+| Build cache keys, look up compiled statements, and store new entries | 0.855 | 19.3% |
+| Compile statements into SQL | 0.028 | 0.6% |
+| Dispatch statements through SQLAlchemy | 0.829 | 18.7% |
+| Outside all timed methods | 1.523 | 34.3% |
+| **Total** | **4.440** | **100%** |
+
+Dispatch covers processing execution options, selecting a database connection or engine, and calling `Connection.execute` through cursor-result setup. Driver calls, fetches, row and model construction, and session handling keep their own time. Each remaining interval counts once, even when a cache miss invokes the compiler inside a dispatch call. [Query timers](../../query_probe.py) · [Timing calculation](../../finalize_probe.py)
+
+The earlier study left **4.31 ms** unassigned. A new PostgreSQL 16.16 run measured **4.22 ms** with the previous timers and **4.44 ms** with query timing enabled on the same runner. The four measured query operations accounted for **2.92 ms (65.7%)** of that 4.44 ms. Median complete passes took **22.40 ms** in the control and **23.39 ms** with query timing. [Per-pass measurements and cache counts](../drain-queries.json.gz) · [Same-runner control](../drain-queries-control.json.gz)
+
+Both runs matched the expected trace IDs on all 224 passes, including timestamp ties split across batches. In each run, MLflow read back all 1,288 root and child spans from 644 archives after clearing the database payloads. Every span matched its input. All seven empty passes recorded zero finalization queries. [PostgreSQL benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46056302730)
+
+To reproduce the comparison, run the control and then enable query timing.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-orm --output drain-orm.json.gz
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-queries --output drain-queries.json.gz
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
