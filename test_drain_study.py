@@ -52,6 +52,8 @@ class DrainStudyTest(unittest.TestCase):
             for row, count in zip(passes, (3, 1, 0), strict=True):
                 with self.subTest(pass_number=row["pass_number"]):
                     self.assertEqual(row["archived_count"], count)
+                    self.assertNotIn("finalization_ms", row)
+                    self.assertNotIn("finalization_calls", row)
                     self.assertEqual(row["phase_calls"], dict.fromkeys(phases, count))
                     durations = row["phase_ms"]
                     self.assertEqual(set(durations), phases | {"other"})
@@ -66,6 +68,31 @@ class DrainStudyTest(unittest.TestCase):
                 "traces_read_back": 4, "spans_read_back": 8,
                 "database_span_payloads_cleared": 8, "archive_files_verified": 4,
             })
+
+    def test_finalization_statements_and_commit_for_each_archived_trace(self):
+        with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
+            expected = seed_queue(store, 5)
+            archive = Path(tmp).resolve()
+            passes = measure_drain(store, archive.as_uri(), expected, profile_finalization=True)
+            # Suffixes 2–5 tie at the older timestamp; suffix 5 must precede suffix 1.
+            suffixes = [[int(t.removeprefix("tr-d1a1"), 16) for t in p["selected_ids"]] for p in passes]
+            self.assertEqual(suffixes, [[2, 3, 4], [5, 1], []])
+            for row, count in zip(passes, (3, 2, 0), strict=True):
+                with self.subTest(pass_number=row["pass_number"]):
+                    calls = row["finalization_calls"]
+                    durations = row["finalization_ms"]
+                    expected_calls = dict.fromkeys((
+                        "lock_trace", "read_trace_tags", "check_span_content", "clear_span_content",
+                        "update_tag", "lookup_tag", "insert_tag", "delete_tag", "commit", "rollback",
+                    ), count)
+                    expected_calls["other_sql"] = 0
+                    self.assertEqual(calls, expected_calls)
+                    self.assertEqual(set(durations), set(calls) | {"other"})
+                    for operation, n in calls.items():
+                        self.assertEqual(durations[operation] > 0, n > 0)
+                    self.assertGreaterEqual(durations["other"], 0)
+                    self.assertAlmostEqual(sum(durations.values()), row["phase_ms"]["db_finalize"])
+            self.assertEqual(verify_readback(store, sql, expected, archive)["spans_read_back"], 10)
 
 
 if __name__ == "__main__":

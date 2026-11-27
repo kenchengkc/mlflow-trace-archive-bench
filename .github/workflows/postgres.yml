@@ -97,8 +97,11 @@ jobs:
         if: inputs.drain_study
         run: |
           python -m unittest -v test_drain_study
-          python drain_study.py --rounds 7 --traces 92 --output drain-study.json.gz >> "$GITHUB_STEP_SUMMARY"
-          python drain_study.py --rounds 7 --traces 92 --profile-phases --output drain-phase-study.json.gz >> "$GITHUB_STEP_SUMMARY"
+          {
+            python drain_study.py --rounds 7 --traces 92 --output drain-study.json.gz
+            python drain_study.py --rounds 7 --traces 92 --profile-phases --output drain-phase-study.json.gz
+            python drain_study.py --rounds 7 --traces 92 --profile-finalization --output drain-finalization.json.gz
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.drain_study
         with:
@@ -110,6 +113,12 @@ jobs:
         with:
           name: drain-phase-study
           path: drain-phase-study.json.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.drain_study
+        with:
+          name: drain-finalization
+          path: drain-finalization.json.gz
           if-no-files-found: error
       - name: Check the migrated fixtures and concurrent writes
         if: inputs.driver_study || inputs.two_step_study

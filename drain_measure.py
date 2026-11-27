@@ -20,7 +20,7 @@ def _time_phase(name, call, intervals):
     return timed
 
 
-def _install_phase_timers(stack, store, intervals):
+def _install_phase_timers(stack, store, intervals, finalization_probe=None):
     from mlflow.store.artifact.local_artifact_repo import LocalArtifactRepository
 
     # MLflow constructs a new repository per trace. Patch the local backend only;
@@ -31,7 +31,10 @@ def _install_phase_timers(stack, store, intervals):
         ("artifact_write", LocalArtifactRepository, "upload_archived_trace_data_bytes"),
         ("db_finalize", store, "_finalize_archived_trace"),
     ):
-        wrapped = _time_phase(phase, getattr(owner, method), intervals)
+        original = getattr(owner, method)
+        if phase == "db_finalize" and finalization_probe is not None:
+            original = finalization_probe.wrap_finalize(original)
+        wrapped = _time_phase(phase, original, intervals)
         stack.enter_context(patch.object(owner, method, new=wrapped))
 
 
@@ -54,7 +57,8 @@ def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns
     return {"phase_ms": {key: ns / 1e6 for key, ns in elapsed.items()}, "phase_calls": calls}
 
 
-def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False) -> list[dict]:
+def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False,
+                  profile_finalization=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -84,15 +88,24 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
     rows = []
     offset = 0
     intervals = []
+    probe = None
+    profile_phases = profile_phases or profile_finalization
     with ExitStack() as stack:
         stack.enter_context(patch.object(store, "_plan_trace_archival", new=timed_plan))
         stack.enter_context(patch.object(store, "_archive_trace_candidate", new=observe_archive))
+        if profile_finalization:
+            from finalize_probe import FinalizeProbe
+
+            probe = FinalizeProbe(store.engine.dialect)
+            probe.install(stack)
         if profile_phases:
-            _install_phase_timers(stack, store, intervals)
+            _install_phase_timers(stack, store, intervals, probe)
         while True:
             plans.clear()
             successful.clear()
             intervals.clear()
+            if probe is not None:
+                probe.events.clear()
             started = perf_counter_ns()
             count = store.archive_traces(
                 resolved_trace_archival_location=archive_uri,
@@ -119,6 +132,10 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
             }
             if profile_phases:
                 row.update(_phase_row(intervals, count, selection_end, selection_ns, ended, total_ns))
+            if probe is not None:
+                detail = probe.summarize(intervals)
+                row["finalization_ms"] = detail["ms"]
+                row["finalization_calls"] = detail["calls"]
             rows.append(row)
             if count == 0:
                 return rows
