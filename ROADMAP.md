@@ -28,6 +28,10 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 **Completed.** Adding 64 KiB to each incoming span reduced concurrent ingestion throughput by about 25% on both sides of the experiment chunk boundary. The finder returned the same ordered batches at every payload size. [Measurements](results/ingestion/README.md#larger-incoming-spans) · [Benchmark code](payload_study.py)
 
+## 7. Drain the queue three traces at a time
+
+**Completed.** Seven 92-trace queues verified timestamp ties across passes and read back every archived span. Within database finalization, 24 SQL executions took a combined 2.38 ms per full pass and three commits took 0.35 ms. Another 6.75 ms elapsed outside the measured driver calls. [Finalization study and reproducer](results/finder/README.md#inside-database-finalization)
+
 ## What earns the next experiment
 
 Start with an upstream report or an unexplained result, change one workload property, and publish the smallest case another contributor can replay. The original operator reported thousands of experiments and tens of gigabytes of span data. [Operator report](https://github.com/mlflow/mlflow/issues/24895)

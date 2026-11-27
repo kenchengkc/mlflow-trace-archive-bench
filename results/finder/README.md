@@ -93,6 +93,29 @@ To repeat the breakdown, use the same setup as the drain benchmark and enable ph
 .venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-phases --output drain-phase-study.json.gz
 ```
 
+### Inside database finalization
+
+Of the **9.48 ms** MLflow spent finalizing a three-trace pass, **2.38 ms** went to executing SQL statements and **0.35 ms** to committing transactions. The largest part, **6.75 ms (71.2%)**, elapsed inside finalization but outside the measured driver calls.
+
+| Work inside finalization | Calls per full pass | Mean ms per full pass | Share of finalization |
+| --- | ---: | ---: | ---: |
+| Read and lock trace headers, read tags, check for span content, and look up the archive-location tag | 12 | 1.290 | 13.61% |
+| Clear span content, update the span-location tag, insert the archive-location tag, and delete any failure tag | 12 | 1.090 | 11.50% |
+| Commit | 3 | 0.348 | 3.67% |
+| Reset connections on return to the pool | 3 | 0.004 | 0.04% |
+| Time outside these driver calls | — | 6.751 | 71.19% |
+| **Total finalization** | | **9.483** | **100%** |
+
+The timers surround actual psycopg2 cursor executions, commits, and pool-reset calls. A reset calls `rollback` after a successful commit. The remaining time includes work such as fetching results, building Python objects, managing sessions, and timer bookkeeping. This measurement leaves those costs grouped together. [Timer implementation](../../finalize_probe.py) · [Individual operation times and counts](../drain-finalization.json.gz)
+
+Each run recreated seven 92-trace queues on PostgreSQL 16.16 with local file storage. The table covers the 210 full passes. Finalization averaged **9.84 ms** in the phase-only control on the same runner and **9.99 ms** in the earlier study. All 224 passes matched the control’s ordered trace IDs. The seven empty passes issued no finalization calls. After timing, MLflow read back all **1,288 spans from 644 archive files** and matched them to the original inputs. [Control timings](../drain-finalization-control.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45972390735)
+
+To reproduce the comparison, run the phase-timing command above, then repeat with driver-call timing enabled.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-finalization --output drain-finalization.json.gz
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
