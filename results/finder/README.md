@@ -1,6 +1,6 @@
 # MLflow’s archival candidate finder
 
-These studies time MLflow’s selection of the oldest eligible traces through its SQLAlchemy tracking store. They cover queue layout, a two-step alternative, and ordering when MLflow splits a request across two SQL queries. [Project overview](../../README.md)
+These studies time MLflow’s selection of the oldest eligible traces through its SQLAlchemy tracking store. They cover queue layout, a two-step alternative, ordering when MLflow splits a request across two SQL queries, and the cost of draining a queue three traces at a time. [Project overview](../../README.md)
 
 ## Through MLflow’s database driver
 
@@ -44,6 +44,30 @@ Adding experiment 1,001 to the selection triggered a second candidate query and 
 Experiments 1,000 and 1,001 had traces with identical timestamps on either side of the chunk boundary. At the batch cutoff, trace ID `…0062` from experiment 1,000 ranked 100th and `…0063` from experiment 1,001 ranked 101st at the same timestamp. Every timed batch matched an independent global sort by timestamp and trace ID. Swapping the two experiments between chunks also preserved the exact order. [Fixture](../../chunk_fixture.py) · [Ordering test](../../test_chunk_study.py)
 
 Timings cover 12 complete transactions per scope on one warm connection, alternating which scope ran first. The untimed query captures and replays verified the IDs, limits and row counts for each SELECT. [Raw samples, ordered rows and plans](../chunk-study.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45676900586)
+
+## Archive three traces per pass
+
+On PostgreSQL 16.16 with local file storage, MLflow 3.18.0 took a median **22.14 ms** to archive a full batch of three traces. Selecting those traces took **3.11 ms**. Across all 210 full batches, selection accounted for **14.3%** of elapsed time. On the final empty pass it accounted for **94.6%**.
+
+| Traces archived per pass | Measured passes | Median selection (ms) | Median complete pass (ms) |
+| ---: | ---: | ---: | ---: |
+| 3 | 210 | 3.11 | 22.14 |
+| 2 | 7 | 2.58 | 15.14 |
+| 0 | 7 | 2.51 | 2.65 |
+
+![Candidate selection and complete archival time across 32 consecutive passes. The first full pass took 29.11 ms, the last full pass took 21.47 ms, and the empty pass took 2.65 ms.](drain-pass-times.png)
+
+Each point is the median for that pass number across seven fresh queues. Each queue held 92 eligible traces across three experiments, with a root and child span per trace. Passes 1–30 archived three traces each, pass 31 archived the remaining two, and pass 32 confirmed the queue was empty. Selection includes experiment and retention lookups, the candidate query, and ordering. The complete pass includes selection, span serialization, local file writes, and database finalization. Readback runs after timing. [Pass timer](../../drain_measure.py) · [Per-pass measurements](../drain-study.json.gz) · [PostgreSQL run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45955942205)
+
+The fixture logged traces in reverse archival order, with four traces sharing each timestamp. Every pass selected and successfully archived exactly the expected IDs in timestamp and trace-ID order, including ties split between passes. Across all seven queues, the benchmark verified **644 archive files** and **1,288 cleared database span payloads**. MLflow’s `get_trace` read back every root and child span, and each matched its original contents. [Fixture and readback checks](../../drain_fixture.py)
+
+To repeat the run, [install the driver dependencies](#reproduce-these-studies) and run this command from the repository root.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --output drain-study.json.gz
+```
+
+To redraw the chart from your own report, run `python3 results/finder/plot_drain.py --input drain-study.json.gz --output drain-pass-times.png` with Matplotlib installed.
 
 ## Reproduce these studies
 
