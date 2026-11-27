@@ -69,6 +69,30 @@ To repeat the run, [install the driver dependencies](#reproduce-these-studies) a
 
 To redraw the chart from your own report, run `python3 results/finder/plot_drain.py --input drain-study.json.gz --output drain-pass-times.png` with Matplotlib installed.
 
+### Where a three-trace pass spends its time
+
+**Database finalization took 9.99 ms per full pass and loading the spans took 6.35 ms.** Together they accounted for **86.0% of the time outside candidate selection**. Writing the three local archive files took 1.67 ms, and serializing their contents took 0.54 ms.
+
+The original full-pass median was **22.14 ms**. For this comparison, one PostgreSQL 16.16 runner measured the workload twice. The control used the original timers (**22.12 ms** median). The second run added four timers inside each pass (**22.23 ms** median). Each run drained seven fresh queues of 92 traces. The table gives mean times across the 210 full passes with phase timing enabled. Shares use total elapsed time across those passes. [Control measurements](../drain-phase-control.json.gz) · [Per-pass phase timings and call counts](../drain-phase-study.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45958568812)
+
+| Phase | Mean ms per three-trace pass | Share of elapsed time |
+| --- | ---: | ---: |
+| Select candidates | 3.13 | 14.1% |
+| Load span rows and trace metadata, then check eligibility | 6.35 | 28.7% |
+| Decode stored spans and serialize to protobuf | 0.54 | 2.4% |
+| Stage the protobuf and write the local archive file | 1.67 | 7.6% |
+| Recheck the trace, clear database span contents, update tags, and commit | 9.99 | 45.1% |
+| Other work, including session handling outside the timers and repository setup | 0.46 | 2.1% |
+| **Complete pass** | **22.15** | **100%** |
+
+Each archived trace called all four timed operations once, in order. The seven empty passes called none. The intervals and residual account for each complete pass before rounding. All 224 profiled passes returned the same ordered IDs as the control, including ties across batch boundaries. After timing, MLflow read back all 1,288 spans from 644 archive files and matched them to the inputs. [Timing code](../../drain_measure.py) · [MLflow archival path](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L7232-L7481)
+
+To repeat the breakdown, use the same setup as the drain benchmark and enable phase timing.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-phases --output drain-phase-study.json.gz
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
