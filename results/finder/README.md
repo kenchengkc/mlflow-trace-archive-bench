@@ -106,7 +106,7 @@ Of the **9.48 ms** MLflow spent finalizing a three-trace pass, **2.38 ms** went 
 | Time outside these driver calls | — | 6.751 | 71.19% |
 | **Total finalization** | | **9.483** | **100%** |
 
-The timers surround actual psycopg2 cursor executions, commits, and pool-reset calls. A reset calls `rollback` after a successful commit. The remaining time includes work such as fetching results, building Python objects, managing sessions, and timer bookkeeping. This measurement leaves those costs grouped together. [Timer implementation](../../finalize_probe.py) · [Individual operation times and counts](../drain-finalization.json.gz)
+The timers surround actual psycopg2 cursor executions, commits, and pool-reset calls. A reset calls `rollback` after a successful commit. The next experiment measures how much of the remaining time goes to fetching rows, building objects, and managing sessions. [Timer implementation](../../finalize_probe.py) · [Individual operation times and counts](../drain-finalization.json.gz)
 
 Each run recreated seven 92-trace queues on PostgreSQL 16.16 with local file storage. The table covers the 210 full passes. Finalization averaged **9.84 ms** in the phase-only control on the same runner and **9.99 ms** in the earlier study. All 224 passes matched the control’s ordered trace IDs. The seven empty passes issued no finalization calls. After timing, MLflow read back all **1,288 spans from 644 archive files** and matched them to the original inputs. [Control timings](../drain-finalization-control.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45972390735)
 
@@ -114,6 +114,28 @@ To reproduce the comparison, run the phase-timing command above, then repeat wit
 
 ```sh
 .venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-finalization --output drain-finalization.json.gz
+```
+
+### Fetching rows, building objects, and managing sessions
+
+Across 210 three-trace passes, **SQLAlchemy session handling took 2.71 ms per pass**. Fetching results and constructing Python rows and mapped objects together took **0.21 ms**. The largest share, **4.31 ms**, remained outside the timed methods.
+
+| Work after excluding driver executions, commits, and resets | Timed calls per full pass | Mean ms per full pass | Share of time outside those driver calls |
+| --- | ---: | ---: | ---: |
+| Fetch rows from the cursor and release it | 12 | 0.030 | 0.4% |
+| Wrap rows, load or allocate mapped objects, and construct trace tags | 39 | 0.176 | 2.4% |
+| Open and close sessions, begin transactions, acquire connections, merge tags, flush changes, and commit | 66 | 2.712 | 37.5% |
+| Other finalization work | — | 4.309 | 59.6% |
+| **Total outside the measured driver calls** | | **7.227** | **100%** |
+
+The fetch timer starts when SQLAlchemy asks the buffered psycopg2 cursor for rows. Object timing covers the Python work that turns those rows into SQLAlchemy rows and model instances, plus explicit trace-tag construction. A session commit can trigger a flush, which can execute SQL. Driver calls keep their own time, and each remaining interval goes to the innermost timed method. The call counts include nested methods. The unassigned time includes work such as constructing queries outside those methods and timer bookkeeping. [SQLAlchemy timers](../../orm_probe.py) · [Timing calculation](../../finalize_probe.py)
+
+On the same PostgreSQL 16.16 runner, the driver-only control averaged **7.09 ms** outside driver calls, compared with **7.23 ms** with the additional timers and **6.75 ms** in the earlier study. Median complete passes took **22.20 ms** in the control and **22.53 ms** with the additional timers. Both runs returned the same ordered IDs across all 224 passes. Each verified all **1,288 spans from 644 archives** against the inputs after clearing the database payloads. All seven empty passes recorded zero finalization calls. [Profiled passes](../drain-orm.json.gz) · [Same-runner control](../drain-orm-control.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/45994588581)
+
+To reproduce the table, run the driver-only command above for the control, then enable the SQLAlchemy timers.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-orm --output drain-orm.json.gz
 ```
 
 ## Reproduce these studies

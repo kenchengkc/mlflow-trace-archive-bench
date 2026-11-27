@@ -30,7 +30,7 @@ Completed work includes index comparisons on PostgreSQL 14 and 16, a 45-case stu
 
 ## 7. Drain the queue three traces at a time
 
-**Completed.** Seven 92-trace queues verified timestamp ties across passes and read back every archived span. Within database finalization, 24 SQL executions took a combined 2.38 ms per full pass and three commits took 0.35 ms. Another 6.75 ms elapsed outside the measured driver calls. [Finalization study and reproducer](results/finder/README.md#inside-database-finalization)
+**Completed.** Seven 92-trace queues verified timestamp ties across passes and read back every archived span. Within database finalization, 24 SQL executions took a combined 2.38 ms per full pass and three commits took 0.35 ms. A follow-up measured 2.71 ms in SQLAlchemy session handling, 0.21 ms fetching rows and constructing objects, and 4.31 ms outside the timed methods. [Driver timings](results/finder/README.md#inside-database-finalization) · [SQLAlchemy timings and reproducer](results/finder/README.md#fetching-rows-building-objects-and-managing-sessions)
 
 ## What earns the next experiment
 
