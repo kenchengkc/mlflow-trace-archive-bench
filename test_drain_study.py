@@ -12,6 +12,23 @@ from test_driver_fixture import installed_mlflow
 
 
 class OrmAttributionTest(unittest.TestCase):
+    def test_query_hooks_only_partition_time_outside_driver_and_orm_calls(self):
+        from finalize_probe import split_query_time
+
+        windows = [(0, 100), (150, 160)]
+        queries = [(13, 17, "compilation"), (12, 18, "compile_cache"), (5, 35, "construction"),
+                   (42, 56, "compilation"), (37, 58, "compile_cache"),
+                   (2, 90, "dispatch"), (92, 96, "construction")]
+        orm = [(10, 28, "session"), (45, 50, "objects")]
+        drivers = [(7, 9, "sql"), (14, 16, "sql"), (47, 49, "sql"),
+                   (65, 70, "sql"), (151, 154, "commit")]
+        result = split_query_time(windows, queries, orm, drivers)
+        # The first compile lies entirely inside the session. Both compile
+        # calls count, but only the second contributes time (14 - 5 = 9 ns).
+        self.assertEqual(result["calls"], {"construction": 2, "compile_cache": 2, "compilation": 2, "dispatch": 1})
+        self.assertEqual({k: round(ms * 1e6) for k, ms in result["ms"].items()},
+                         {"construction": 14, "compile_cache": 7, "compilation": 9, "dispatch": 32, "other": 15})
+
     def test_nested_orm_and_driver_calls_share_no_time(self):
         from finalize_probe import split_orm_time
 
@@ -123,6 +140,7 @@ class DrainStudyTest(unittest.TestCase):
             self.assertEqual([row["selected_ids"] for row in passes], [ids[:3], ids[3:], []])
             for row, count in zip(passes, (3, 1, 0), strict=True):
                 with self.subTest(pass_number=row["pass_number"]):
+                    self.assertFalse(any(key.startswith("query_") for key in row))
                     self.assertEqual(row["archived_count"], count)
                     # Per trace the pinned path fetches four result sets. Object
                     # and session counts include nested calls to the timed methods.
@@ -143,6 +161,46 @@ class DrainStudyTest(unittest.TestCase):
             self.assertEqual(verify_readback(store, sql, expected, archive), {
                 "traces_read_back": 4, "spans_read_back": 8,
                 "database_span_payloads_cleared": 8, "archive_files_verified": 4,
+            })
+
+    def test_query_costs_partition_orm_remainder_and_preserve_archival(self):
+        categories = {"construction", "compile_cache", "compilation", "dispatch"}
+        with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
+            expected = seed_queue(store, 5)
+            archive = Path(tmp).resolve()
+            rows = measure_drain(store, archive.as_uri(), expected, profile_queries=True)
+            # Trace 5 shares the first timestamp and moves to the next pass.
+            batches = [[int(t.removeprefix("tr-d1a1"), 16) for t in row["selected_ids"]] for row in rows]
+            self.assertEqual(batches, [[2, 3, 4], [5, 1], []])
+            for row, count in zip(rows, (3, 2, 0), strict=True):
+                with self.subTest(pass_number=row["pass_number"]):
+                    self.assertEqual(row["archived_count"], count)
+                    cache = row["query_cache_counts"]
+                    misses = cache["cache_miss"]
+                    if row["pass_number"] == 1:
+                        self.assertGreater(misses, 0)
+                        self.assertLess(misses, 8 * count)
+                    else:
+                        self.assertEqual(misses, 0)
+                    self.assertEqual(row["query_calls"], {
+                        "construction": 28 * count, "compile_cache": 8 * count,
+                        "compilation": misses, "dispatch": 24 * count,
+                    })
+                    self.assertEqual(set(row["query_ms"]), categories | {"other"})
+                    times_ns = {key: round(ms * 1e6) for key, ms in row["query_ms"].items()}
+                    self.assertEqual(sum(times_ns.values()), round(row["orm_ms"]["other"] * 1e6))
+                    for key in categories - {"compilation"}:
+                        self.assertEqual(times_ns[key] > 0, bool(count))
+                    self.assertGreaterEqual(times_ns["other"], 0)
+                    self.assertEqual(cache, {
+                        "cache_hit": 8 * count - misses, "cache_miss": misses, "caching_disabled": 0,
+                        "no_cache_key": 0, "no_dialect_support": 0,
+                    })
+                    if not misses:
+                        self.assertEqual(times_ns["compilation"], 0)
+            self.assertEqual(verify_readback(store, sql, expected, archive), {
+                "traces_read_back": 5, "spans_read_back": 10,
+                "database_span_payloads_cleared": 10, "archive_files_verified": 5,
             })
 
 

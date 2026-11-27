@@ -42,7 +42,8 @@ def summarize(rounds):
             group["mean_phase_ms"] = {phase: ms / len(rows) for phase, ms in totals.items()}
             group["phase_share_pct"] = {phase: 100 * ms / total for phase, ms in totals.items()}
         for name, parent, bucket in (("finalization", "phase_ms", "db_finalize"),
-                                     ("orm", "finalization_ms", "other")):
+                                     ("orm", "finalization_ms", "other"),
+                                     ("query", "orm_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
                 continue
@@ -56,11 +57,17 @@ def summarize(rounds):
                 for op, ms in operation_totals.items()
             }
             group[calls] = {op: sum(row[calls][op] for row in rows) for op in rows[0][calls]}
+        if "query_cache_counts" in rows[0]:
+            group["query_cache_counts"] = {
+                key: sum(row["query_cache_counts"][key] for row in rows)
+                for key in rows[0]["query_cache_counts"]
+            }
         summary.append(group)
     return summary
 
 
-def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False, profile_orm=False):
+def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
+        profile_orm=False, profile_queries=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -72,6 +79,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
     if profile_phases or profile_finalization:
         report["phase_intervals"] = {
@@ -97,6 +105,20 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             "session": "Create or close a session, begin a transaction, acquire its connection, merge, flush or commit.",
             "other": "Finalization time outside the measured SQLAlchemy and driver calls.",
         }
+    if profile_queries:
+        report["query_interval"] = (
+            "Partition the remaining ORM 'other' time. Driver, fetch, object and session timers "
+            "retain their time. Of the remaining intervals, the innermost timed query method wins. "
+            "Call counts and cache outcomes include operations inside the earlier timers."
+        )
+        report["query_boundaries"] = {
+            "construction": "Build query objects, predicates, loader options, and SELECT, UPDATE or DELETE statements.",
+            "compile_cache": "Prepare the compiled-statement cache key, look up or store a compiled statement.",
+            "compilation": "Generate SQL with SQLAlchemy's statement compiler.",
+            "dispatch": "Process ORM execution options, resolve the database bind and run Connection.execute "
+                        "through cursor-result setup.",
+            "other": "Previously unassigned finalization time outside all timed query methods.",
+        }
     for number in range(1, rounds + 1):
         with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
             if number == 1:
@@ -104,7 +126,8 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             expected = seed_queue(store, traces)
             archive_root = Path(tmp).resolve()
             passes = measure_drain(store, archive_root.as_uri(), expected, profile_phases=profile_phases,
-                                   profile_finalization=profile_finalization, profile_orm=profile_orm)
+                                   profile_finalization=profile_finalization, profile_orm=profile_orm,
+                                   profile_queries=profile_queries)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])
@@ -121,10 +144,13 @@ def main():
                         help="include phase timings and break database finalization into SQL calls, commit and other time")
     parser.add_argument("--profile-orm", action="store_true",
                         help="include driver timings and distinguish result fetching, mapped objects and session handling")
+    parser.add_argument("--profile-queries", action="store_true",
+                        help="break down remaining ORM time into query construction, cache lookup, compilation and dispatch")
     parser.add_argument("--output", type=Path, help="save every pass and its verification as JSON or JSON.gz")
     args = parser.parse_args()
     report = run(args.rounds, args.traces, profile_phases=args.profile_phases,
-                 profile_finalization=args.profile_finalization, profile_orm=args.profile_orm)
+                 profile_finalization=args.profile_finalization, profile_orm=args.profile_orm,
+                 profile_queries=args.profile_queries)
     print("| Traces per pass | Passes | Median selection (ms) | Median total (ms) | Share of total time |")
     print("| ---: | ---: | ---: | ---: | ---: |")
     for row in report["summary"]:
@@ -136,7 +162,8 @@ def main():
         for row in report["summary"]:
             for phase, ms in row["mean_phase_ms"].items():
                 print(f"| {row['traces_per_pass']} | {phase} | {ms:.3f} | {row['phase_share_pct'][phase]:.2f}% |")
-    for name, label in (("finalization", "Finalization operation"), ("orm", "SQLAlchemy operation")):
+    for name, label in (("finalization", "Finalization operation"), ("orm", "SQLAlchemy operation"),
+                        ("query", "Query operation")):
         if name + "_interval" not in report:
             continue
         print(f"\n| Traces per pass | {label} | Total calls | Mean ms per pass |")
@@ -145,6 +172,12 @@ def main():
             for op, ms in row["mean_" + name + "_ms"].items():
                 calls = row[name + "_calls"].get(op, "—")
                 print(f"| {row['traces_per_pass']} | {op} | {calls} | {ms:.3f} |")
+    if "query_interval" in report:
+        print("\n| Traces per pass | Compiled-statement cache outcome | Count |")
+        print("| ---: | --- | ---: |")
+        for row in report["summary"]:
+            for outcome, count in row["query_cache_counts"].items():
+                print(f"| {row['traces_per_pass']} | {outcome} | {count} |")
     if args.output:
         opener = gzip.open if args.output.suffix == ".gz" else open
         with opener(args.output, "wt", encoding="utf-8") as out:

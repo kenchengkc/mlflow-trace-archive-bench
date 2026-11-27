@@ -58,7 +58,7 @@ def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns
 
 
 def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False,
-                  profile_finalization=False, profile_orm=False) -> list[dict]:
+                  profile_finalization=False, profile_orm=False, profile_queries=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -90,6 +90,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
     intervals = []
     probe = None
     orm = None
+    queries = None
+    profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
     profile_phases = profile_phases or profile_finalization
     with ExitStack() as stack:
@@ -105,6 +107,11 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
 
             orm = OrmProbe(probe)
             orm.install(stack)
+        if profile_queries:
+            from query_probe import QueryProbe
+
+            queries = QueryProbe(probe)
+            queries.install(stack)
         if profile_phases:
             _install_phase_timers(stack, store, intervals, probe)
         while True:
@@ -115,6 +122,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 probe.events.clear()
             if orm is not None:
                 orm.events.clear()
+            if queries is not None:
+                queries.reset()
             started = perf_counter_ns()
             count = store.archive_traces(
                 resolved_trace_archival_location=archive_uri,
@@ -142,12 +151,19 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
             if profile_phases:
                 row.update(_phase_row(intervals, count, selection_end, selection_ns, ended, total_ns))
             if probe is not None:
-                detail = probe.summarize(intervals, orm_events=None if orm is None else orm.events)
+                detail = probe.summarize(
+                    intervals, orm_events=None if orm is None else orm.events,
+                    query_events=None if queries is None else queries.events,
+                )
                 row["finalization_ms"] = detail["ms"]
                 row["finalization_calls"] = detail["calls"]
                 if orm is not None:
                     row["orm_ms"] = detail["orm_ms"]
                     row["orm_calls"] = detail["orm_calls"]
+                if queries is not None:
+                    row["query_ms"] = detail["query_ms"]
+                    row["query_calls"] = detail["query_calls"]
+                    row["query_cache_counts"] = queries.cache_counts.copy()
             rows.append(row)
             if count == 0:
                 return rows
