@@ -188,6 +188,34 @@ To reproduce the comparison, run the query-only control and then enable result t
 .venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-results --output drain-results.json.gz
 ```
 
+### Result setup, filtering, and timer overhead
+
+**Consuming rows took 0.705 ms per three-trace pass, 57.3% of SQLAlchemy result processing.** The earlier run measured 1.012 ms for all result processing. The new control measured 1.234 ms. Giving the same 42 calls more specific labels, using the same clocks, yielded 1.231 ms across 210 full passes.
+
+| SQLAlchemy result operation | Calls per full pass | Mean ms per full pass | Share of result time |
+| --- | ---: | ---: | ---: |
+| Set up SELECT results and adapt bulk UPDATE/DELETE results | 18 | 0.510 | 41.4% |
+| Configure scalar and uniqueness filters | 15 | 0.016 | 1.3% |
+| Consume single rows, including uniqueness checks and eager tag loading | 9 | 0.705 | 57.3% |
+
+The filtering timer covers calls to `scalars()` and `unique()`. Applying those filters as rows are read counts toward consumption. The timings exclude nested work already assigned to other operations. Each pass reconciles to its result-processing total before rounding. [Result timers](../../result_probe.py) · [Per-pass breakdown](../result-timing/detail.json.gz)
+
+| Timing mode | Mean result processing (ms) | Mean time outside the prior timers (ms) | Median complete pass (ms) |
+| --- | ---: | ---: | ---: |
+| Original result timer | 1.234 | 0.500 | 30.34 |
+| Three result categories, same clocks | 1.231 | 0.506 | 30.35 |
+| Three categories plus timers around existing wrappers | 1.226 | 0.595 | 30.90 |
+
+**Timer entry and exit accounted for 0.101 ms (17.0%) of the 0.595 ms remainder in the run that measured them.** The outer timers capture wrapper entry, forwarding, and recording the original timer’s event. Nested intervals count once. The remaining **0.494 ms** includes other work and the outer timers’ own event recording wherever it falls outside all timed intervals. Enabling the outer timers increased the mean remainder by **0.089 ms** compared with the three-category run. The bookkeeping share of the earlier **0.394 ms** remains uncertain because observing it changed the timing. [Bookkeeping timer](../../timer_overhead.py) · [Control](../result-timing/control.json.gz) · [Overhead measurements](../result-timing/overhead.json.gz)
+
+All three modes ran on the same PostgreSQL 16.16 runner. Each round recreated the same 92-trace queue for each mode. The first six rounds covered all six execution orders, and the seventh repeated the first order. Each mode matched the expected IDs on all **224 passes**, including ties across batches, and read back all **1,288 spans from 644 archives** after the database payloads were cleared. Every span matched its input. [Comparison runner](../../result_timing_study.py) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46114148244)
+
+This command runs all three modes and saves their per-pass reports.
+
+```sh
+.venv/bin/python result_timing_study.py --rounds 7 --traces 92 --output-dir result-timing
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
