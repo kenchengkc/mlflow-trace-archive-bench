@@ -48,6 +48,10 @@ on:
         description: Compare row iteration, uniqueness checks and eager tag loading
         type: boolean
         default: false
+      tag_load:
+        description: Compare query preparation, tag-row grouping and attachment to trace headers
+        type: boolean
+        default: false
       upsert_study:
         description: Measure PostgreSQL execution, WAL and TOAST for real MLflow span upserts
         type: boolean
@@ -82,7 +86,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study || inputs.row_consumption)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study || inputs.row_consumption || inputs.tag_load)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -162,6 +166,17 @@ jobs:
         with:
           name: row-consumption
           path: row-consumption/*.json.gz
+          if-no-files-found: error
+      - name: Verify and measure eager tag loading on matched queues
+        if: inputs.tag_load
+        run: |
+          python -m unittest -v test_tag_load test_tag_load_account test_row_consumption
+          python result_timing_study.py --study tag-load --rounds 7 --traces 92 --output-dir tag-load >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.tag_load
+        with:
+          name: tag-load
+          path: tag-load/*.json.gz
           if-no-files-found: error
       - name: Check the migrated fixtures and concurrent writes
         if: inputs.driver_study || inputs.two_step_study

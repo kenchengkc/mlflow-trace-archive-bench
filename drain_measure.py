@@ -60,7 +60,7 @@ def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns
 def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False,
                   profile_finalization=False, profile_orm=False, profile_queries=False,
                   profile_results=False, profile_result_detail=False, profile_timer_overhead=False,
-                  profile_consumption=False) -> list[dict]:
+                  profile_consumption=False, profile_tag_load=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -95,7 +95,9 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
     queries = None
     results = None
     consumption = None
+    tag_load = None
     overhead = None
+    profile_consumption = profile_consumption or profile_tag_load
     profile_result_detail = profile_result_detail or profile_timer_overhead or profile_consumption
     profile_results = profile_results or profile_result_detail
     profile_queries = profile_queries or profile_results
@@ -132,9 +134,14 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
         if profile_consumption:
             from consumption_probe import ConsumptionProbe
 
+            if profile_tag_load:
+                from tag_load_probe import TagLoadProbe
+
+                tag_load = TagLoadProbe(probe)
+                tag_load.install(stack)
             # ResultProbe must time the whole instrumented single-row consumer.
             # Overhead envelopes continue to surround only the original timers.
-            consumption = ConsumptionProbe(probe)
+            consumption = ConsumptionProbe(probe, tag_load_probe=tag_load)
             consumption.install(stack)
         if profile_results:
             from result_probe import ResultProbe
@@ -159,6 +166,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 results.events.clear()
             if consumption is not None:
                 consumption.reset()
+            if tag_load is not None:
+                tag_load.reset()
             if overhead is not None:
                 overhead.events.clear()
             started = perf_counter_ns()
@@ -195,6 +204,7 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                     profile_result_detail=profile_result_detail,
                     overhead_events=None if overhead is None else overhead.events,
                     consumption_events=None if consumption is None else consumption.events,
+                    tag_load_events=None if tag_load is None else tag_load.events,
                 )
                 row["finalization_ms"] = detail["ms"]
                 row["finalization_calls"] = detail["calls"]
@@ -216,6 +226,10 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                     row["consumption_calls"] = detail["consumption_calls"]
                     row["consumption_counts"] = consumption.counts.copy()
                     row["eager_tag_load_ms"] = detail["eager_tag_load_ms"]
+                if tag_load is not None:
+                    row["tag_load_ms"] = detail["tag_load_ms"]
+                    row["tag_load_calls"] = detail["tag_load_calls"]
+                    row["tag_load_counts"] = tag_load.counts.copy()
                 if overhead is not None:
                     row["overhead_ms"] = detail["overhead_ms"]
                     row["overhead_calls"] = detail["overhead_calls"]

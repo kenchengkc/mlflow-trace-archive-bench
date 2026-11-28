@@ -47,6 +47,7 @@ def summarize(rounds):
                                      ("result", "query_ms", "other"),
                                      ("result_detail", "result_ms", "results"),
                                      ("consumption", "result_detail_ms", "consumption"),
+                                     ("tag_load", "consumption_ms", "eager_tags"),
                                      ("overhead", "result_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
@@ -61,7 +62,7 @@ def summarize(rounds):
                 for op, ms in operation_totals.items()
             }
             group[calls] = {op: sum(row[calls][op] for row in rows) for op in rows[0][calls]}
-        for counts in ("query_cache_counts", "consumption_counts"):
+        for counts in ("query_cache_counts", "consumption_counts", "tag_load_counts"):
             if counts in rows[0]:
                 group[counts] = {key: sum(row[counts][key] for row in rows) for key in rows[0][counts]}
         if "eager_tag_load_ms" in rows[0]:
@@ -72,7 +73,8 @@ def summarize(rounds):
 
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
         profile_orm=False, profile_queries=False, profile_results=False,
-        profile_result_detail=False, profile_timer_overhead=False, profile_consumption=False):
+        profile_result_detail=False, profile_timer_overhead=False, profile_consumption=False,
+        profile_tag_load=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -84,6 +86,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_consumption = profile_consumption or profile_tag_load
     profile_result_detail = profile_result_detail or profile_timer_overhead or profile_consumption
     profile_results = profile_results or profile_result_detail
     profile_queries = profile_queries or profile_results
@@ -161,6 +164,17 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             "Elapsed time in the tag loader including nested database and ORM calls. "
             "This reference measurement overlaps other timers."
         )
+    if profile_tag_load:
+        report["tag_load_interval"] = (
+            "Partition consumption_ms.eager_tags. Work assigned to earlier timers retains its time. "
+            "The inclusive loader measurement remains available in eager_tag_load_ms."
+        )
+        report["tag_load_boundaries"] = {
+            "preparation": "Prepare the select-in relationship query and its parent-key batch before execution.",
+            "grouping": "Consume returned tag rows and group them by trace header key.",
+            "attachment": "Populate the loaded relationship collection on trace headers.",
+            "other": "Remaining exclusive eager-loader time outside these three scopes.",
+        }
     if profile_timer_overhead:
         report["overhead_interval"] = (
             "Partition result_ms.other. Bookkeeping is time within additional timers surrounding the existing "
@@ -178,7 +192,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                                    profile_queries=profile_queries, profile_results=profile_results,
                                    profile_result_detail=profile_result_detail,
                                    profile_timer_overhead=profile_timer_overhead,
-                                   profile_consumption=profile_consumption)
+                                   profile_consumption=profile_consumption, profile_tag_load=profile_tag_load)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])

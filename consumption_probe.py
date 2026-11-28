@@ -42,8 +42,9 @@ def _instrument_consumer(original, advance, uniqueness, comparison):
 
 
 class ConsumptionProbe:
-    def __init__(self, finalize_probe):
+    def __init__(self, finalize_probe, *, tag_load_probe=None):
         self.finalize_probe = finalize_probe
+        self.tag_load_probe = tag_load_probe
         self.events = []
         self.counts = {}
         self.reset()
@@ -94,13 +95,14 @@ class ConsumptionProbe:
 
         tag_relationship = SqlTraceInfo.__mapper__.relationships["tags"]
         load = SelectInLoader._load_for_path
+        matched_load = self.tag_load_probe.wrap_load(load) if self.tag_load_probe is not None else load
 
         def load_tags(loader, *args, **kwargs):
             if not consuming or loader.parent_property is not tag_relationship:
                 return load(loader, *args, **kwargs)
             start = perf_counter_ns()
             try:
-                return load(loader, *args, **kwargs)
+                return matched_load(loader, *args, **kwargs)
             finally:
                 self.events.append((start, perf_counter_ns(), "eager_tags"))
 
