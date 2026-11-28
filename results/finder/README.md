@@ -216,6 +216,30 @@ This command runs all three modes and saves their per-pass reports.
 .venv/bin/python result_timing_study.py --rounds 7 --traces 92 --output-dir result-timing
 ```
 
+### Row iteration, uniqueness checks, and eager tag loading
+
+**Loading the locked traces’ tags accounted for 78.4% of row-consumption time.** Across 210 three-trace passes on PostgreSQL 16.16, SQLAlchemy spent 0.599 ms per pass on that work after excluding time already assigned to SQL execution, fetching, and other measured operations.
+
+| Work inside row consumption | Calls per full pass | Mean ms per full pass | Share |
+| --- | ---: | ---: | ---: |
+| Advance the single-row iterator | 12 | 0.071 | 9.3% |
+| Check uniqueness in the single-row consumer | 3 | 0.012 | 1.5% |
+| Eagerly load and attach trace tags | 3 | 0.599 | 78.4% |
+| Other row-consumer work and timer bookkeeping | — | 0.082 | 10.7% |
+| **Total row consumption** | | **0.764** | **100%** |
+
+On each full pass, six iterator advances returned a row and six reached the end of a result. The uniqueness check prepared the first row’s identity and looked for a second row. Across all 630 checks, zero additional rows required an equality comparison. The time spent advancing the iterator during that check appears in the iteration row. [SQLAlchemy’s single-row consumer](https://github.com/sqlalchemy/sqlalchemy/blob/ce50c07cc877d5e78ad058da300bc9a22a7e13ed/lib/sqlalchemy/engine/result.py#L788-L871) · [Timing code](../../consumption_probe.py)
+
+MLflow requests the trace’s tags when it loads the locked header. Each tag load issued exactly one SELECT. The three loads together took **1.784 ms** end to end, including **0.281 ms** executing those SELECTs in the driver. The 0.599 ms in the table is the portion charged to row consumption. It includes iterating the separate tag result and attaching the tags to the header. [MLflow finalizer](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L7423-L7480) · [Per-pass measurements](../row-consumption/detail.json.gz)
+
+The earlier study measured **0.705 ms** for row consumption. On this runner the control measured **0.737 ms** and the detailed timers measured **0.764 ms**, a difference of **0.027 ms** per full pass. Median complete passes took **28.67 ms** and **28.95 ms**, respectively. The two modes alternated which ran first across seven fresh queues each. Both matched the expected timestamp and trace-ID order on all **224 passes**, including ties across batches. In each mode, MLflow read back all **1,288 spans from 644 archives** after the database payloads were cleared. Every span matched its input. [Same-runner control](../row-consumption/control.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46116568768)
+
+Run the matched comparison and save both reports with this command.
+
+```sh
+.venv/bin/python result_timing_study.py --study consumption --rounds 7 --traces 92 --output-dir row-consumption
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
