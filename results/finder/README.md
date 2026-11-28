@@ -164,6 +164,30 @@ To reproduce the comparison, run the control and then enable query timing.
 .venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-queries --output drain-queries.json.gz
 ```
 
+### Eligibility checks and result processing
+
+**SQLAlchemy result processing accounted for two-thirds of the remaining finalization time.** Across 210 three-trace passes on PostgreSQL 16.16, it took **1.012 ms** per pass. MLflow’s eligibility rechecks took **0.113 ms**. Together they accounted for **74.1%** of the remainder.
+
+| Work inside the query-timing remainder | Timed calls per full pass | Mean ms per full pass | Share of remainder |
+| --- | ---: | ---: | ---: |
+| MLflow eligibility rechecks | 6 | 0.113 | 7.5% |
+| SQLAlchemy result processing | 42 | 1.012 | 66.6% |
+| Outside all timed methods | — | 0.394 | 25.9% |
+| **Total** | | **1.520** | **100%** |
+
+For each archived trace, eligibility timing starts when MLflow’s locked header query returns. MLflow checks that the header exists, the payload generation is unchanged, spans are database-backed, the trace has no archival failure tag, and its status permits archival. It then checks for nonempty span content. SQLAlchemy result timing covers setting up SELECT and bulk UPDATE/DELETE results, applying scalar and uniqueness filters, and consuming single rows, including the work that triggers the related tag query. Nested query, driver, fetch, object, and session calls keep their own time. [MLflow finalizer](https://github.com/mlflow/mlflow/blob/ba41106d110b67096384da12b6b85473457598db/mlflow/store/tracking/sqlalchemy_store.py#L7423-L7480) · [Timers](../../result_probe.py)
+
+The earlier study left **1.523 ms** unassigned. We repeated the workload twice on one runner. The query-only control measured a remainder of **1.487 ms**. With the additional timers, the same remainder was **1.520 ms** before the breakdown above. Median complete passes took **22.44 ms** in the control and **22.52 ms** with the new timers. [Control measurements](../drain-results-control.json.gz) · [Per-pass breakdown](../drain-results.json.gz)
+
+Each run matched the expected timestamp and trace-ID order on all **224 passes**, including ties across batches. After the database span payloads were cleared, MLflow read back **1,288 spans from 644 archives** in each run. Every root and child span matched its input. The seven empty passes recorded zero calls to either set of timers. [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46103725854)
+
+To reproduce the comparison, run the query-only control and then enable result timing.
+
+```sh
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-queries --output drain-queries.json.gz
+.venv/bin/python drain_study.py --rounds 7 --traces 92 --profile-results --output drain-results.json.gz
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
