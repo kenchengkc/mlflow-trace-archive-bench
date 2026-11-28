@@ -48,6 +48,7 @@ def summarize(rounds):
                                      ("result_detail", "result_ms", "results"),
                                      ("consumption", "result_detail_ms", "consumption"),
                                      ("tag_load", "consumption_ms", "eager_tags"),
+                                     ("tag_prep", "tag_load_ms", "preparation"),
                                      ("overhead", "result_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
@@ -62,7 +63,7 @@ def summarize(rounds):
                 for op, ms in operation_totals.items()
             }
             group[calls] = {op: sum(row[calls][op] for row in rows) for op in rows[0][calls]}
-        for counts in ("query_cache_counts", "consumption_counts", "tag_load_counts"):
+        for counts in ("query_cache_counts", "consumption_counts", "tag_load_counts", "tag_prep_counts"):
             if counts in rows[0]:
                 group[counts] = {key: sum(row[counts][key] for row in rows) for key in rows[0][counts]}
         if "eager_tag_load_ms" in rows[0]:
@@ -74,7 +75,7 @@ def summarize(rounds):
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
         profile_orm=False, profile_queries=False, profile_results=False,
         profile_result_detail=False, profile_timer_overhead=False, profile_consumption=False,
-        profile_tag_load=False):
+        profile_tag_load=False, profile_tag_prep=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -86,6 +87,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_tag_load = profile_tag_load or profile_tag_prep
     profile_consumption = profile_consumption or profile_tag_load
     profile_result_detail = profile_result_detail or profile_timer_overhead or profile_consumption
     profile_results = profile_results or profile_result_detail
@@ -175,6 +177,17 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             "attachment": "Populate the loaded relationship collection on trace headers.",
             "other": "Remaining exclusive eager-loader time outside these three scopes.",
         }
+    if profile_tag_prep:
+        report["tag_prep_interval"] = (
+            "Partition tag_load_ms.preparation before the tag SELECT executes. "
+            "Nested work already charged to an earlier timer retains its time."
+        )
+        report["tag_prep_boundaries"] = {
+            "select_construction": "Build the SELECT, its columns, FROM clause and parent-key predicate.",
+            "loader_options": "Resolve the relationship path and apply ORM loader and compile options.",
+            "parent_keys": "Collect parent identities, slice each batch and extract the keys for the IN predicate.",
+            "other": "Remaining preparation time, including control flow and timer bookkeeping.",
+        }
     if profile_timer_overhead:
         report["overhead_interval"] = (
             "Partition result_ms.other. Bookkeeping is time within additional timers surrounding the existing "
@@ -192,7 +205,8 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                                    profile_queries=profile_queries, profile_results=profile_results,
                                    profile_result_detail=profile_result_detail,
                                    profile_timer_overhead=profile_timer_overhead,
-                                   profile_consumption=profile_consumption, profile_tag_load=profile_tag_load)
+                                   profile_consumption=profile_consumption, profile_tag_load=profile_tag_load,
+                                   profile_tag_prep=profile_tag_prep)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])

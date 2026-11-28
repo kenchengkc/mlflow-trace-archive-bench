@@ -15,6 +15,7 @@ RESULT_OPERATIONS = ("eligibility", "results")
 RESULT_DETAIL_OPERATIONS = ("setup", "filtering", "consumption")
 CONSUMPTION_OPERATIONS = ("iteration", "uniqueness", "eager_tags")
 TAG_LOAD_OPERATIONS = ("preparation", "grouping", "attachment")
+TAG_PREP_OPERATIONS = ("select_construction", "loader_options", "parent_keys")
 
 
 def _split_ns(windows, events, excluded, operations):
@@ -105,8 +106,10 @@ def _outside_operation(windows, parent_events, operation):
 
 
 def split_result_time(windows, result_events, query_events, orm_events, driver_events,
-                      *, profile_detail=False, consumption_events=None, tag_load_events=None):
+                      *, profile_detail=False, consumption_events=None, tag_load_events=None, tag_prep_events=None):
     """Partition the query remainder between eligibility, result processing and other work."""
+    if tag_prep_events is not None and tag_load_events is None:
+        raise ValueError("Tag preparation timing requires tag-load intervals")
     if tag_load_events is not None and consumption_events is None:
         raise ValueError("Tag-load timing requires consumption intervals")
     excluded = [(start, end) for start, end, _ in chain(query_events, orm_events, driver_events)]
@@ -130,6 +133,7 @@ def split_result_time(windows, result_events, query_events, orm_events, driver_e
     for name, parent, events, operations in (
         ("consumption", "consumption", consumption_events, CONSUMPTION_OPERATIONS),
         ("tag_load", "eager_tags", tag_load_events, TAG_LOAD_OPERATIONS),
+        ("tag_prep", "preparation", tag_prep_events, TAG_PREP_OPERATIONS),
     ):
         if events is None:
             break
@@ -215,7 +219,8 @@ class FinalizeProbe:
         return finalize
 
     def summarize(self, intervals, *, orm_events=None, query_events=None, result_events=None,
-                  profile_result_detail=False, overhead_events=None, consumption_events=None, tag_load_events=None):
+                  profile_result_detail=False, overhead_events=None, consumption_events=None,
+                  tag_load_events=None, tag_prep_events=None):
         """Check call boundaries after each pass and reconcile to its exact outer timers."""
         calls = dict.fromkeys(FINALIZE_OPERATIONS, 0)
         elapsed = dict.fromkeys(FINALIZE_OPERATIONS, 0)
@@ -259,7 +264,7 @@ class FinalizeProbe:
         if result_events is not None:
             detail = split_result_time(windows, result_events, query_events, orm_events, drivers,
                                        profile_detail=profile_result_detail, consumption_events=consumption_events,
-                                       tag_load_events=tag_load_events)
+                                       tag_load_events=tag_load_events, tag_prep_events=tag_prep_events)
             summary.update(result_ms=detail["ms"], result_calls=detail["calls"])
             if profile_result_detail or consumption_events is not None:
                 summary.update(result_detail_ms=detail["result_detail_ms"],
@@ -277,6 +282,8 @@ class FinalizeProbe:
                                eager_tag_load_ms=sum(end - start for start, end in loads) / 1e6)
             if tag_load_events is not None:
                 summary.update(tag_load_ms=detail["tag_load_ms"], tag_load_calls=detail["tag_load_calls"])
+            if tag_prep_events is not None:
+                summary.update(tag_prep_ms=detail["tag_prep_ms"], tag_prep_calls=detail["tag_prep_calls"])
             if overhead_events is not None:
                 timed_calls = len(drivers) + len(orm_events) + len(query_events) + len(result_events)
                 if len(overhead_events) != timed_calls:

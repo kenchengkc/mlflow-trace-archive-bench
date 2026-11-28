@@ -23,7 +23,17 @@ TAG_LOAD_MODES = {
     "control": {"profile_consumption": True},
     "detail": {"profile_tag_load": True},
 }
-STUDIES = {"results": MODES, "consumption": CONSUMPTION_MODES, "tag-load": TAG_LOAD_MODES}
+TAG_PREP_MODES = {
+    "control": {"profile_tag_load": True},
+    "detail": {"profile_tag_prep": True},
+}
+STUDIES = {"results": MODES, "consumption": CONSUMPTION_MODES,
+           "tag-load": TAG_LOAD_MODES, "tag-prep": TAG_PREP_MODES}
+BREAKDOWNS = {
+    "consumption": ("mean_result_detail_ms", "consumption", "row consumption", "mean_consumption_ms"),
+    "tag-load": ("mean_consumption_ms", "eager_tags", "exclusive eager tag loading", "mean_tag_load_ms"),
+    "tag-prep": ("mean_tag_load_ms", "preparation", "tag query preparation", "mean_tag_prep_ms"),
+}
 
 
 def compare(rounds=7, traces=92, *, study="results"):
@@ -54,14 +64,14 @@ def compare(rounds=7, traces=92, *, study="results"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=STUDIES, default="results",
-                        help="compare timers for result processing, row consumption or eager tag loading")
+                        help="compare timers for result processing, row consumption, eager tag loading or tag query preparation")
     parser.add_argument("--rounds", type=positive_int, default=7, help="fresh queues per mode")
     parser.add_argument("--traces", type=positive_int, default=92, help="two-span traces per queue")
     parser.add_argument("--output-dir", type=Path, help="directory for the per-mode JSON.gz reports")
     args = parser.parse_args()
     reports = compare(args.rounds, args.traces, study=args.study)
-    directories = {"results": "result-timing", "consumption": "row-consumption", "tag-load": "tag-load"}
-    output_dir = args.output_dir or Path(directories[args.study])
+    directories = {"results": "result-timing", "consumption": "row-consumption"}
+    output_dir = args.output_dir or Path(directories.get(args.study, args.study))
     output_dir.mkdir(parents=True, exist_ok=True)
     for mode, report in reports.items():
         path = output_dir / f"{mode}.json.gz"
@@ -69,13 +79,9 @@ def main():
             json.dump(report, out, indent=2)
             out.write("\n")
         group = report["summary"][0]
-        if args.study in ("consumption", "tag-load"):
-            if args.study == "tag-load":
-                parent_ms = group["mean_consumption_ms"]["eager_tags"]
-                label, parts = "exclusive eager tag loading", "mean_tag_load_ms"
-            else:
-                parent_ms = group["mean_result_detail_ms"]["consumption"]
-                label, parts = "row consumption", "mean_consumption_ms"
+        if args.study in BREAKDOWNS:
+            parent, bucket, label, parts = BREAKDOWNS[args.study]
+            parent_ms = group[parent][bucket]
             print(f"{mode} ({group['passes']} passes of {group['traces_per_pass']}): "
                   f"mean {label} {parent_ms:.3f} ms. Saved {path}.")
             for name, ms in group.get(parts, {}).items():

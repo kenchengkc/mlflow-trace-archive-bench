@@ -10,6 +10,7 @@ __pycache__/
 /result-timing/
 /row-consumption/
 /tag-load/
+/tag-prep/
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz
