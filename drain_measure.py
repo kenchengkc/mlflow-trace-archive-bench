@@ -58,7 +58,8 @@ def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns
 
 
 def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False,
-                  profile_finalization=False, profile_orm=False, profile_queries=False) -> list[dict]:
+                  profile_finalization=False, profile_orm=False, profile_queries=False,
+                  profile_results=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -91,6 +92,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
     probe = None
     orm = None
     queries = None
+    results = None
+    profile_queries = profile_queries or profile_results
     profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
     profile_phases = profile_phases or profile_finalization
@@ -112,6 +115,11 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
 
             queries = QueryProbe(probe)
             queries.install(stack)
+        if profile_results:
+            from result_probe import ResultProbe
+
+            results = ResultProbe(probe)
+            results.install(stack)
         if profile_phases:
             _install_phase_timers(stack, store, intervals, probe)
         while True:
@@ -124,6 +132,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 orm.events.clear()
             if queries is not None:
                 queries.reset()
+            if results is not None:
+                results.events.clear()
             started = perf_counter_ns()
             count = store.archive_traces(
                 resolved_trace_archival_location=archive_uri,
@@ -154,6 +164,7 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 detail = probe.summarize(
                     intervals, orm_events=None if orm is None else orm.events,
                     query_events=None if queries is None else queries.events,
+                    result_events=None if results is None else results.events,
                 )
                 row["finalization_ms"] = detail["ms"]
                 row["finalization_calls"] = detail["calls"]
@@ -164,6 +175,9 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                     row["query_ms"] = detail["query_ms"]
                     row["query_calls"] = detail["query_calls"]
                     row["query_cache_counts"] = queries.cache_counts.copy()
+                if results is not None:
+                    row["result_ms"] = detail["result_ms"]
+                    row["result_calls"] = detail["result_calls"]
             rows.append(row)
             if count == 0:
                 return rows

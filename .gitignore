@@ -6,6 +6,7 @@ __pycache__/
 /drain-finalization.json.gz
 /drain-orm.json.gz
 /drain-queries.json.gz
+/drain-results.json.gz
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz

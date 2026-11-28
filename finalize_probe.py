@@ -1,4 +1,4 @@
-"""Attribute finalization wall time to nested SQLAlchemy and psycopg2 operations."""
+"""Attribute finalization wall time to nested MLflow, SQLAlchemy and psycopg2 operations."""
 
 from itertools import chain
 from time import perf_counter_ns
@@ -11,6 +11,7 @@ FINALIZE_OPERATIONS = (
 )
 ORM_OPERATIONS = ("fetch", "objects", "session")
 QUERY_OPERATIONS = ("construction", "compile_cache", "compilation", "dispatch")
+RESULT_OPERATIONS = ("eligibility", "results")
 
 
 def _split_time(windows, events, excluded, operations):
@@ -27,7 +28,7 @@ def _split_time(windows, events, excluded, operations):
         if not any(left <= start <= end <= right for left, right in windows):
             raise RuntimeError("Recorded call falls outside a finalization window")
 
-    # Earlier timers keep their time even when a new query hook runs inside one.
+    # Earlier timers keep their time even when a new hook runs inside one.
     # Merge their intervals first so e.g. a driver call inside a flush is excluded once.
     covered = []
     for start, end in sorted(excluded):
@@ -77,6 +78,12 @@ def split_query_time(windows, query_events, orm_events, driver_events):
     """Distinguish query operations only in the remainder of the ORM breakdown."""
     excluded = [(start, end) for start, end, _ in chain(orm_events, driver_events)]
     return _split_time(windows, query_events, excluded, QUERY_OPERATIONS)
+
+
+def split_result_time(windows, result_events, query_events, orm_events, driver_events):
+    """Partition the query remainder between eligibility, result processing and other work."""
+    excluded = [(start, end) for start, end, _ in chain(query_events, orm_events, driver_events)]
+    return _split_time(windows, result_events, excluded, RESULT_OPERATIONS)
 
 
 def _sql_operation(statement):
@@ -144,7 +151,7 @@ class FinalizeProbe:
                 self.active = False
         return finalize
 
-    def summarize(self, intervals, *, orm_events=None, query_events=None):
+    def summarize(self, intervals, *, orm_events=None, query_events=None, result_events=None):
         """Check call boundaries after each pass and reconcile to its exact outer timers."""
         calls = dict.fromkeys(FINALIZE_OPERATIONS, 0)
         elapsed = dict.fromkeys(FINALIZE_OPERATIONS, 0)
@@ -172,12 +179,17 @@ class FinalizeProbe:
             raise RuntimeError("Found driver calls outside measured finalization windows")
         elapsed["other"] = total - sum(elapsed.values())
         summary = {"calls": calls, "ms": {op: ns / 1e6 for op, ns in elapsed.items()}}
-        if orm_events is not None:
-            windows = [(start, end) for phase, start, end in intervals if phase == "db_finalize"]
-            drivers = [(start, end, op) for start, end, op, _ in self.events]
-            detail = split_orm_time(windows, orm_events, drivers)
-            summary.update(orm_ms=detail["ms"], orm_calls=detail["calls"])
-            if query_events is not None:
-                detail = split_query_time(windows, query_events, orm_events, drivers)
-                summary.update(query_ms=detail["ms"], query_calls=detail["calls"])
+        if orm_events is None:
+            return summary
+        windows = [(start, end) for phase, start, end in intervals if phase == "db_finalize"]
+        drivers = [(start, end, op) for start, end, op, _ in self.events]
+        detail = split_orm_time(windows, orm_events, drivers)
+        summary.update(orm_ms=detail["ms"], orm_calls=detail["calls"])
+        if query_events is None:
+            return summary
+        detail = split_query_time(windows, query_events, orm_events, drivers)
+        summary.update(query_ms=detail["ms"], query_calls=detail["calls"])
+        if result_events is not None:
+            detail = split_result_time(windows, result_events, query_events, orm_events, drivers)
+            summary.update(result_ms=detail["ms"], result_calls=detail["calls"])
         return summary

@@ -43,7 +43,8 @@ def summarize(rounds):
             group["phase_share_pct"] = {phase: 100 * ms / total for phase, ms in totals.items()}
         for name, parent, bucket in (("finalization", "phase_ms", "db_finalize"),
                                      ("orm", "finalization_ms", "other"),
-                                     ("query", "orm_ms", "other")):
+                                     ("query", "orm_ms", "other"),
+                                     ("result", "query_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
                 continue
@@ -67,7 +68,7 @@ def summarize(rounds):
 
 
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
-        profile_orm=False, profile_queries=False):
+        profile_orm=False, profile_queries=False, profile_results=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -79,6 +80,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_queries = profile_queries or profile_results
     profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
     if profile_phases or profile_finalization:
@@ -119,6 +121,19 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                         "through cursor-result setup.",
             "other": "Previously unassigned finalization time outside all timed query methods.",
         }
+    if profile_results:
+        report["result_interval"] = (
+            "Partition query_ms.other. Earlier driver, ORM and query timers keep their time. Within "
+            "the remainder, each interval belongs to the innermost eligibility or result-processing "
+            "scope. Calls count all invocations of the timed methods."
+        )
+        report["result_boundaries"] = {
+            "eligibility": "On successful finalizations, check the returned header, payload generation, "
+                           "span location, failure tag and status, then confirm nonempty span content.",
+            "results": "Set up ORM SELECT and bulk UPDATE/DELETE results, adapt scalar and unique results, "
+                       "and consume single rows, including eager tag-loading work within those calls.",
+            "other": "Time in the query remainder outside the eligibility and result-processing timers.",
+        }
     for number in range(1, rounds + 1):
         with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
             if number == 1:
@@ -127,7 +142,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             archive_root = Path(tmp).resolve()
             passes = measure_drain(store, archive_root.as_uri(), expected, profile_phases=profile_phases,
                                    profile_finalization=profile_finalization, profile_orm=profile_orm,
-                                   profile_queries=profile_queries)
+                                   profile_queries=profile_queries, profile_results=profile_results)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])
@@ -146,11 +161,13 @@ def main():
                         help="include driver timings and distinguish result fetching, mapped objects and session handling")
     parser.add_argument("--profile-queries", action="store_true",
                         help="break down remaining ORM time into query construction, cache lookup, compilation and dispatch")
+    parser.add_argument("--profile-results", action="store_true",
+                        help="break down remaining query time into MLflow eligibility checks and SQLAlchemy result processing")
     parser.add_argument("--output", type=Path, help="save every pass and its verification as JSON or JSON.gz")
     args = parser.parse_args()
     report = run(args.rounds, args.traces, profile_phases=args.profile_phases,
                  profile_finalization=args.profile_finalization, profile_orm=args.profile_orm,
-                 profile_queries=args.profile_queries)
+                 profile_queries=args.profile_queries, profile_results=args.profile_results)
     print("| Traces per pass | Passes | Median selection (ms) | Median total (ms) | Share of total time |")
     print("| ---: | ---: | ---: | ---: | ---: |")
     for row in report["summary"]:
@@ -163,7 +180,7 @@ def main():
             for phase, ms in row["mean_phase_ms"].items():
                 print(f"| {row['traces_per_pass']} | {phase} | {ms:.3f} | {row['phase_share_pct'][phase]:.2f}% |")
     for name, label in (("finalization", "Finalization operation"), ("orm", "SQLAlchemy operation"),
-                        ("query", "Query operation")):
+                        ("query", "Query operation"), ("result", "Eligibility or result operation")):
         if name + "_interval" not in report:
             continue
         print(f"\n| Traces per pass | {label} | Total calls | Mean ms per pass |")
