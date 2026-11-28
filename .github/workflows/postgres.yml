@@ -56,6 +56,10 @@ on:
         description: Compare tag SELECT construction, loader options and parent-key batching
         type: boolean
         default: false
+      tag_select:
+        description: Compare column and bundle setup, SELECT and FROM construction, and the IN predicate
+        type: boolean
+        default: false
       upsert_study:
         description: Measure PostgreSQL execution, WAL and TOAST for real MLflow span upserts
         type: boolean
@@ -90,7 +94,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study || inputs.row_consumption || inputs.tag_load || inputs.tag_prep)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study || inputs.row_consumption || inputs.tag_load || inputs.tag_prep || inputs.tag_select)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -192,6 +196,17 @@ jobs:
         with:
           name: tag-prep
           path: tag-prep/*.json.gz
+          if-no-files-found: error
+      - name: Verify and measure tag SELECT construction on matched queues
+        if: inputs.tag_select
+        run: |
+          python -m unittest -v test_tag_select test_tag_select_account test_tag_prep
+          python result_timing_study.py --study tag-select --rounds 7 --traces 92 --output-dir tag-select >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.tag_select
+        with:
+          name: tag-select
+          path: tag-select/*.json.gz
           if-no-files-found: error
       - name: Check the migrated fixtures and concurrent writes
         if: inputs.driver_study || inputs.two_step_study

@@ -15,20 +15,40 @@ def _instrument(original, probe, transform):
     ast.fix_missing_locations(tree)
     ast.increment_lineno(tree, first_line - 1)
     namespace = dict(original.__globals__, _tag_probe=probe, _tag_clock=perf_counter_ns,
-                     _tag_record=probe.prep_events.append)
+                     _tag_record=probe.prep_events.append, _tag_select_record=probe.select_events.append)
     exec(compile(tree, getsourcefile(original), "exec"), namespace)
     return namespace[original.__name__]
 
 
-def _timed_preparation(kind, body):
+def _timed_preparation(kind, body, prefix="_tag"):
     # Inline clocks keep the cost of recording the event outside its interval.
+    # Nested SELECT timers use their own start variable inside the parent clock.
     def clock():
         return ast.Call(ast.Name("_tag_clock", ast.Load()), [], [])
 
-    start = ast.Assign([ast.Name("_tag_start", ast.Store())], clock())
-    event = ast.Tuple([ast.Name("_tag_start", ast.Load()), clock(), ast.Constant(kind)], ast.Load())
-    stop = ast.Expr(ast.Call(ast.Name("_tag_record", ast.Load()), [event], []))
+    start = ast.Assign([ast.Name(prefix + "_start", ast.Store())], clock())
+    event = ast.Tuple([ast.Name(prefix + "_start", ast.Load()), clock(), ast.Constant(kind)], ast.Load())
+    stop = ast.Expr(ast.Call(ast.Name(prefix + "_record", ast.Load()), [event], []))
     return [ast.copy_location(start, body[0]), *body, ast.copy_location(stop, body[-1])]
+
+
+def _instrument_select(body):
+    statements = [ast.unparse(stmt) for stmt in body]
+    if not (len(body) == 9
+            and statements[:2] == ["pk_cols = query_info.pk_cols", "in_expr = query_info.in_expr"]
+            and statements[2].startswith("if not query_info.load_with_join:")
+            and statements[3:6] == ["bundle_ent = orm_util.Bundle('pk', *pk_cols)",
+                                    "bundle_sql = bundle_ent.__clause_element__()",
+                                    "entity_sql = effective_entity.__clause_element__()"]
+            and statements[6].startswith("q = Select._create_raw_select(")
+            and statements[7].startswith("if not query_info.load_with_join:")
+            and "q = q.select_from(effective_entity)" in statements[7]
+            and "q = q.select_from(self._parent_alias).join(" in statements[7]
+            and statements[8] == "q = q.filter(in_expr.in_(sql.bindparam('primary_keys')))"):
+        raise RuntimeError("Unrecognized SQLAlchemy tag SELECT construction boundaries")
+    return [*_timed_preparation("columns_bundle", body[:6], "_tag_select"),
+            *_timed_preparation("select_from", body[6:8], "_tag_select"),
+            *_timed_preparation("in_predicate", body[8:], "_tag_select")]
 
 
 def _instrument_path(body, probe):
@@ -52,8 +72,11 @@ def _instrument_path(body, probe):
             and isinstance(body[-1], ast.If) and ast.unparse(body[-1].test) == "query_info.load_only_child"
             and statements[-1].count("self._load_via_parent(") == 1):
         raise RuntimeError("Unrecognized SQLAlchemy select-in preparation boundaries")
+    construction = body[select:options]
+    if probe.profile_select:
+        construction = _instrument_select(construction)
     body[:] = [*body[:info + 1], *_timed_preparation("parent_keys", body[info + 1:select]),
-               *_timed_preparation("select_construction", body[select:options]),
+               *_timed_preparation("select_construction", construction),
                *_timed_preparation("loader_options", body[options:order]), *body[order:]]
 
 
@@ -104,11 +127,13 @@ def _instrument_parent(body, probe):
 
 
 class TagLoadProbe:
-    def __init__(self, finalize_probe, *, profile_preparation=False):
+    def __init__(self, finalize_probe, *, profile_preparation=False, profile_select=False):
         self.finalize_probe = finalize_probe
-        self.profile_preparation = profile_preparation
+        self.profile_preparation = profile_preparation or profile_select
+        self.profile_select = profile_select
         self.events = []
         self.prep_events = []
+        self.select_events = []
         self._loader = None
         self._start = None
         self.reset()
@@ -116,6 +141,7 @@ class TagLoadProbe:
     def reset(self):
         self.events.clear()
         self.prep_events.clear()
+        self.select_events.clear()
         self.prep_counts = dict.fromkeys(("key_batches", "keys_batched"), 0)
         self.counts = dict.fromkeys((
             "tag_rows_grouped", "parent_key_groups", "headers_attached", "empty_collections_attached",

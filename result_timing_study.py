@@ -27,12 +27,17 @@ TAG_PREP_MODES = {
     "control": {"profile_tag_load": True},
     "detail": {"profile_tag_prep": True},
 }
+TAG_SELECT_MODES = {
+    "control": {"profile_tag_prep": True},
+    "detail": {"profile_tag_select": True},
+}
 STUDIES = {"results": MODES, "consumption": CONSUMPTION_MODES,
-           "tag-load": TAG_LOAD_MODES, "tag-prep": TAG_PREP_MODES}
+           "tag-load": TAG_LOAD_MODES, "tag-prep": TAG_PREP_MODES, "tag-select": TAG_SELECT_MODES}
 BREAKDOWNS = {
     "consumption": ("mean_result_detail_ms", "consumption", "row consumption", "mean_consumption_ms"),
     "tag-load": ("mean_consumption_ms", "eager_tags", "exclusive eager tag loading", "mean_tag_load_ms"),
     "tag-prep": ("mean_tag_load_ms", "preparation", "tag query preparation", "mean_tag_prep_ms"),
+    "tag-select": ("mean_tag_prep_ms", "select_construction", "tag SELECT construction", "mean_tag_select_ms"),
 }
 
 
@@ -64,7 +69,7 @@ def compare(rounds=7, traces=92, *, study="results"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study", choices=STUDIES, default="results",
-                        help="compare timers for result processing, row consumption, eager tag loading or tag query preparation")
+                        help="choose the operation to break down against its matched control")
     parser.add_argument("--rounds", type=positive_int, default=7, help="fresh queues per mode")
     parser.add_argument("--traces", type=positive_int, default=92, help="two-span traces per queue")
     parser.add_argument("--output-dir", type=Path, help="directory for the per-mode JSON.gz reports")

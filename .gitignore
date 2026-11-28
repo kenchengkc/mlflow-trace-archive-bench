@@ -11,6 +11,7 @@ __pycache__/
 /row-consumption/
 /tag-load/
 /tag-prep/
+/tag-select/
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz

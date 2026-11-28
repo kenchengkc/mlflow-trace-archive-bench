@@ -49,6 +49,7 @@ def summarize(rounds):
                                      ("consumption", "result_detail_ms", "consumption"),
                                      ("tag_load", "consumption_ms", "eager_tags"),
                                      ("tag_prep", "tag_load_ms", "preparation"),
+                                     ("tag_select", "tag_prep_ms", "select_construction"),
                                      ("overhead", "result_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
@@ -75,7 +76,7 @@ def summarize(rounds):
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
         profile_orm=False, profile_queries=False, profile_results=False,
         profile_result_detail=False, profile_timer_overhead=False, profile_consumption=False,
-        profile_tag_load=False, profile_tag_prep=False):
+        profile_tag_load=False, profile_tag_prep=False, profile_tag_select=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -87,6 +88,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_tag_prep = profile_tag_prep or profile_tag_select
     profile_tag_load = profile_tag_load or profile_tag_prep
     profile_consumption = profile_consumption or profile_tag_load
     profile_result_detail = profile_result_detail or profile_timer_overhead or profile_consumption
@@ -188,6 +190,18 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             "parent_keys": "Collect parent identities, slice each batch and extract the keys for the IN predicate.",
             "other": "Remaining preparation time, including control flow and timer bookkeeping.",
         }
+    if profile_tag_select:
+        report["tag_select_interval"] = (
+            "Partition tag_prep_ms.select_construction. Earlier timers retain their nested work. "
+            "Construction ends before loader options, binding each batch of trace IDs, SQL compilation and execution."
+        )
+        report["tag_select_boundaries"] = {
+            "columns_bundle": "Resolve the key columns and IN expression, build the primary-key bundle, "
+                              "and obtain the SQL expressions for the bundle and tag entity.",
+            "select_from": "Create the raw SELECT and set its FROM clause, including the join if required.",
+            "in_predicate": "Create the primary_keys bind parameter, build the IN predicate and apply the filter.",
+            "other": "Construction time outside the three measured scopes, including timer bookkeeping.",
+        }
     if profile_timer_overhead:
         report["overhead_interval"] = (
             "Partition result_ms.other. Bookkeeping is time within additional timers surrounding the existing "
@@ -206,7 +220,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                                    profile_result_detail=profile_result_detail,
                                    profile_timer_overhead=profile_timer_overhead,
                                    profile_consumption=profile_consumption, profile_tag_load=profile_tag_load,
-                                   profile_tag_prep=profile_tag_prep)
+                                   profile_tag_prep=profile_tag_prep, profile_tag_select=profile_tag_select)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])
