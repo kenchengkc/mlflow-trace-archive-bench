@@ -262,6 +262,28 @@ Both modes matched the expected timestamp and trace-ID order on all **224 passes
 .venv/bin/python result_timing_study.py --study tag-load --rounds 7 --traces 92 --output-dir tag-load
 ```
 
+### Inside tag query preparation
+
+**Constructing the three SELECTs took 0.242 ms per full pass, or 84.0% of tag query preparation.** The earlier study measured 0.283 ms for preparation. Across 210 three-trace passes per mode on PostgreSQL 16.16, the matched control averaged 0.2866 ms and the detailed run averaged 0.2882 ms. The difference was 0.0016 ms, with round-by-round differences ranging from −0.0158 to +0.0147 ms. [Control measurements](../tag-prep/control.json.gz) · [Per-pass breakdown](../tag-prep/detail.json.gz)
+
+| Work before the tag query executes | Mean ms per three-trace pass | Share of preparation |
+| --- | ---: | ---: |
+| Construct the SELECT, its columns, and its `FROM` and `IN` clauses | 0.242 | 84.0% |
+| Resolve the relationship path and apply loader and compile options | 0.025 | 8.7% |
+| Collect parent identities and build each batch of keys | 0.008 | 2.9% |
+| Other preparation and timer bookkeeping | 0.013 | 4.4% |
+| **Total preparation** | **0.288** | **100%** |
+
+Each full pass loaded tags for three locked trace headers in three separate queries. Each query received a batch of one trace ID. The SELECT timer covers building the Python statement. The loader-options timer covers configuring that statement for the trace’s tags. Nested calls already measured elsewhere, including `Select.options()`, retain their original attribution. SQL compilation and database execution occur after preparation. [SQLAlchemy loader](https://github.com/sqlalchemy/sqlalchemy/blob/ce50c07cc877d5e78ad058da300bc9a22a7e13ed/lib/sqlalchemy/orm/strategies.py#L3165-L3412) · [Timing code](../../tag_load_probe.py)
+
+The modes alternated which ran first across seven matched pairs of 92-trace queues. Median full-pass time was 22.38 ms in the control and 22.43 ms with the detailed timers. Both modes matched the expected timestamp and trace-ID order on all 224 passes, including ties across batches. Each read back all 1,288 spans from 644 archives after the database payloads were cleared. Every span matched its input. [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46123909403)
+
+A separate test loads five headers in batches of two, two, and one. SQLAlchemy constructs the SELECT once and applies its loader options once across all three batches. The original and instrumented loaders issue identical SQL with identical parameters and return the same filtered tags, including an empty collection. [Regression tests](../../test_tag_prep.py)
+
+```sh
+.venv/bin/python result_timing_study.py --study tag-prep --rounds 7 --traces 92 --output-dir tag-prep
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
