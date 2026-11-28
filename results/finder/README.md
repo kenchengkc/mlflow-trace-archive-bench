@@ -240,6 +240,28 @@ Run the matched comparison and save both reports with this command.
 .venv/bin/python result_timing_study.py --study consumption --rounds 7 --traces 92 --output-dir row-consumption
 ```
 
+### Preparing tag queries, grouping rows, and attaching collections
+
+**Preparing the three tag queries took 0.283 ms per full pass.** That was 57.0% of the time charged to eager tag loading and more than twice the time spent grouping six returned tag rows and attaching them to three trace headers. The table gives means across 210 three-trace passes on PostgreSQL 16.16.
+
+| Work inside eager tag loading | Mean ms per full pass | Share of exclusive loader time |
+| --- | ---: | ---: |
+| Prepare the tag SELECT and its parent keys | 0.283 | 57.0% |
+| Group returned tag rows by trace ID | 0.091 | 18.3% |
+| Attach each tag collection to its trace header | 0.041 | 8.2% |
+| Other loader work and timer bookkeeping | 0.082 | 16.6% |
+| **Total** | **0.497** | **100%** |
+
+Each query loaded two tags for one header. Preparation ends before `Session.execute`. Grouping starts after execution returns and SQLAlchemy configures the result’s uniqueness filter. Attachment looks up the group for each header and sets its loaded collection. The table excludes work already charged to SQL execution, fetching, and other earlier timers. Including that nested work, the three tag loads took **1.490 ms** end to end. [SQLAlchemy loader](https://github.com/sqlalchemy/sqlalchemy/blob/ce50c07cc877d5e78ad058da300bc9a22a7e13ed/lib/sqlalchemy/orm/strategies.py#L3165-L3434) · [Timers](../../tag_load_probe.py) · [Per-pass breakdown](../tag-load/detail.json.gz)
+
+The earlier study measured **0.599 ms** of exclusive loader time. We repeated the workload in two modes on one runner. The control measured **0.478 ms** and the detailed timers measured **0.497 ms**. Median complete passes took **23.10 ms** and **22.97 ms**, respectively. The modes alternated which ran first across seven matched pairs of 92-trace queues. [Control measurements](../tag-load/control.json.gz) · [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46117667862)
+
+Both modes matched the expected timestamp and trace-ID order on all **224 passes**, including ties across batches. Each read back all **1,288 spans from 644 archives** after the database payloads were cleared. Every span matched its input. A separate test loaded three headers in one tag query and verified the correct collection for headers with two tags, one tag, and no tags. [Ordering, grouping, and readback tests](../../test_tag_load.py)
+
+```sh
+.venv/bin/python result_timing_study.py --study tag-load --rounds 7 --traces 92 --output-dir tag-load
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
