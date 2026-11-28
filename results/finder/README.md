@@ -284,6 +284,28 @@ A separate test loads five headers in batches of two, two, and one. SQLAlchemy c
 .venv/bin/python result_timing_study.py --study tag-prep --rounds 7 --traces 92 --output-dir tag-prep
 ```
 
+### Inside tag SELECT construction
+
+**Column and bundle setup took 0.1110 ms per three-trace pass. Building the `IN` predicate took another 0.0941 ms.** Together they accounted for 83.9% of the time SQLAlchemy spent constructing the three tag queries. The table gives means across 210 full passes on PostgreSQL 16.16. [Per-pass breakdown](../tag-select/detail.json.gz)
+
+| Work inside SELECT construction | Mean ms per three-trace pass | Share |
+| --- | ---: | ---: |
+| Prepare the key column, its bundle, and the tag entity’s SQL expression | 0.1110 | 45.4% |
+| Create the SELECT and set its FROM clause | 0.0375 | 15.3% |
+| Build and apply the `IN` predicate | 0.0941 | 38.5% |
+| Time outside the three scopes, including timer bookkeeping | 0.0019 | 0.8% |
+| **Total SELECT construction** | **0.2445** | **100%** |
+
+SQLAlchemy wraps the trace ID column in a bundle so it can match returned tags to their trace header. It builds a SELECT from that bundle and the tag entity, sets `FROM trace_tags`, then constructs the `IN` filter with a placeholder for the trace IDs. Supplying the IDs, compiling SQL, and executing the query happen later. A separate test checked each timing boundary against the corresponding SQLAlchemy method and verified identical SQL, parameters, and tag values with the timers enabled. [SQLAlchemy loader](https://github.com/sqlalchemy/sqlalchemy/blob/ce50c07cc877d5e78ad058da300bc9a22a7e13ed/lib/sqlalchemy/orm/strategies.py#L3223-L3270) · [Timing code](../../tag_load_probe.py) · [Regression tests](../../test_tag_select.py)
+
+The earlier study measured **0.2422 ms** for SELECT construction. In this comparison, the control averaged **0.2542 ms** and the detailed run **0.2445 ms**. The modes alternated which ran first across seven matched pairs of 92-trace queues. The difference in round means (detailed minus control) ranged from −0.0389 to +0.0100 ms. Median complete passes took 25.09 ms in the control and 24.53 ms with the new timers. [Earlier measurements](../tag-prep/detail.json.gz) · [Matched control](../tag-select/control.json.gz)
+
+Both modes selected the expected trace IDs in timestamp and trace-ID order on all **224 passes**, including ties across batch boundaries. After the database span payloads were cleared, each mode read back **1,288 spans from 644 archives**. Every root and child span matched its input. [Benchmark run](https://github.com/kenchengkc/mlflow-trace-archive-bench/actions/runs/46125564455)
+
+```sh
+.venv/bin/python result_timing_study.py --study tag-select --rounds 7 --traces 92 --output-dir tag-select
+```
+
 ## Reproduce these studies
 
 Run the commands from the repository root. The runner uses a disposable PostgreSQL cluster and initializes the tracking tables with MLflow’s migrations. [PostgreSQL prerequisites](../../README.md#reproduce-the-benchmark)
