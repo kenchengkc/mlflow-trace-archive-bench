@@ -7,6 +7,7 @@ __pycache__/
 /drain-orm.json.gz
 /drain-queries.json.gz
 /drain-results.json.gz
+/result-timing/
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz

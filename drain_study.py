@@ -44,7 +44,9 @@ def summarize(rounds):
         for name, parent, bucket in (("finalization", "phase_ms", "db_finalize"),
                                      ("orm", "finalization_ms", "other"),
                                      ("query", "orm_ms", "other"),
-                                     ("result", "query_ms", "other")):
+                                     ("result", "query_ms", "other"),
+                                     ("result_detail", "result_ms", "results"),
+                                     ("overhead", "result_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
                 continue
@@ -68,7 +70,8 @@ def summarize(rounds):
 
 
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
-        profile_orm=False, profile_queries=False, profile_results=False):
+        profile_orm=False, profile_queries=False, profile_results=False,
+        profile_result_detail=False, profile_timer_overhead=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -80,6 +83,8 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
+    profile_result_detail = profile_result_detail or profile_timer_overhead
+    profile_results = profile_results or profile_result_detail
     profile_queries = profile_queries or profile_results
     profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
@@ -134,6 +139,17 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                        "and consume single rows, including eager tag-loading work within those calls.",
             "other": "Time in the query remainder outside the eligibility and result-processing timers.",
         }
+    if profile_result_detail:
+        report["result_detail_interval"] = (
+            "Partition result_ms.results using the same hook timestamps. Setup prepares ORM results, "
+            "filtering configures scalar/unique adapters, and consumption reads rows and applies those filters."
+        )
+    if profile_timer_overhead:
+        report["overhead_interval"] = (
+            "Partition result_ms.other. Bookkeeping is time within additional timers surrounding the existing "
+            "probe wrappers after excluding all previously attributed intervals. Includes observer forwarding; "
+            "the remaining time also includes instrumentation outside the observed boundaries."
+        )
     for number in range(1, rounds + 1):
         with local_database() as (sql, uri), open_store(uri) as store, TemporaryDirectory() as tmp:
             if number == 1:
@@ -142,7 +158,9 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             archive_root = Path(tmp).resolve()
             passes = measure_drain(store, archive_root.as_uri(), expected, profile_phases=profile_phases,
                                    profile_finalization=profile_finalization, profile_orm=profile_orm,
-                                   profile_queries=profile_queries, profile_results=profile_results)
+                                   profile_queries=profile_queries, profile_results=profile_results,
+                                   profile_result_detail=profile_result_detail,
+                                   profile_timer_overhead=profile_timer_overhead)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])

@@ -7,6 +7,10 @@ from orm_probe import OrmProbe
 
 
 class ResultProbe(OrmProbe):
+    def __init__(self, finalize_probe, *, profile_detail=False):
+        super().__init__(finalize_probe)
+        self.profile_detail = profile_detail
+
     def install(self, stack):
         from mlflow.store.tracking.dbmodels.models import SqlTraceInfo
         from mlflow.store.tracking.sqlalchemy_store import SqlAlchemyStore
@@ -60,11 +64,16 @@ class ResultProbe(OrmProbe):
         stack.enter_context(patch.object(Query, "one_or_none", new=get_header))
         stack.enter_context(patch.object(SqlAlchemyStore, "_is_trace_metadata_actionable_for_archival", new=metadata))
 
+        # Change the label at installation so both modes time exactly the same
+        # method calls. The detailed report adds the three categories after the pass.
+        filtering = "filtering" if self.profile_detail else "results"
+        consumption = "consumption" if self.profile_detail else "results"
+        setup_category = "setup" if self.profile_detail else "results"
         hooks = (
             (SqlAlchemyStore, "eligibility", ("_trace_has_non_empty_span_content",)),
-            (Result, "results", ("scalars", "unique")),
-            (ScalarResult, "results", ("unique",)),
-            (ResultInternal, "results", ("_only_one_row",)),
+            (Result, filtering, ("scalars", "unique")),
+            (ScalarResult, filtering, ("unique",)),
+            (ResultInternal, consumption, ("_only_one_row",)),
         )
         for owner, category, names in hooks:
             for name in names:
@@ -75,5 +84,5 @@ class ResultProbe(OrmProbe):
         # They set up SELECT row processors or adapt the bulk UPDATE/DELETE result.
         for owner in (ORMCompileState, BulkUDCompileState):
             setup = owner.orm_setup_cursor_result.__func__
-            wrapped = classmethod(self._observe(setup, "results"))
+            wrapped = classmethod(self._observe(setup, setup_category))
             stack.enter_context(patch.object(owner, "orm_setup_cursor_result", new=wrapped))

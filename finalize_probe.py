@@ -12,9 +12,10 @@ FINALIZE_OPERATIONS = (
 ORM_OPERATIONS = ("fetch", "objects", "session")
 QUERY_OPERATIONS = ("construction", "compile_cache", "compilation", "dispatch")
 RESULT_OPERATIONS = ("eligibility", "results")
+RESULT_DETAIL_OPERATIONS = ("setup", "filtering", "consumption")
 
 
-def _split_time(windows, events, excluded, operations):
+def _split_ns(windows, events, excluded, operations):
     """Partition time outside excluded intervals, giving nested calls priority."""
     calls = dict.fromkeys(operations, 0)
     elapsed = dict.fromkeys((*operations, "other"), 0)
@@ -61,6 +62,11 @@ def _split_time(windows, events, excluded, operations):
         parents.append((end, operation))
     if min(elapsed.values()) < 0 or sum(elapsed.values()) != available:
         raise RuntimeError("Measured times do not reconcile to the available finalization time")
+    return calls, elapsed
+
+
+def _split_time(windows, events, excluded, operations):
+    calls, elapsed = _split_ns(windows, events, excluded, operations)
     return {"calls": calls, "ms": {op: ns / 1e6 for op, ns in elapsed.items()}}
 
 
@@ -80,10 +86,32 @@ def split_query_time(windows, query_events, orm_events, driver_events):
     return _split_time(windows, query_events, excluded, QUERY_OPERATIONS)
 
 
-def split_result_time(windows, result_events, query_events, orm_events, driver_events):
+def split_result_time(windows, result_events, query_events, orm_events, driver_events,
+                      *, profile_detail=False):
     """Partition the query remainder between eligibility, result processing and other work."""
     excluded = [(start, end) for start, end, _ in chain(query_events, orm_events, driver_events)]
-    return _split_time(windows, result_events, excluded, RESULT_OPERATIONS)
+    if not profile_detail:
+        return _split_time(windows, result_events, excluded, RESULT_OPERATIONS)
+    # Only the labels change. Splitting all four kinds of event together preserves
+    # nesting between eligibility and consumption, including coincident timestamps.
+    calls, ns = _split_ns(windows, result_events, excluded, ("eligibility", *RESULT_DETAIL_OPERATIONS))
+    result_calls = {k: calls[k] for k in RESULT_DETAIL_OPERATIONS}
+    result_ns = {k: ns[k] for k in RESULT_DETAIL_OPERATIONS}
+    return {
+        "calls": {"eligibility": calls["eligibility"], "results": sum(result_calls.values())},
+        "ms": {
+            "eligibility": ns["eligibility"] / 1e6, "results": sum(result_ns.values()) / 1e6,
+            "other": ns["other"] / 1e6,
+        },
+        "result_detail_calls": result_calls,
+        "result_detail_ms": {k: value / 1e6 for k, value in result_ns.items()},
+    }
+
+
+def split_overhead_time(windows, overhead_events, result_events, query_events, orm_events, driver_events):
+    """Count only the parts of wrapper envelopes outside every measured operation."""
+    excluded = [event[:2] for event in chain(result_events, query_events, orm_events, driver_events)]
+    return _split_time(windows, overhead_events, excluded, ("bookkeeping",))
 
 
 def _sql_operation(statement):
@@ -151,7 +179,8 @@ class FinalizeProbe:
                 self.active = False
         return finalize
 
-    def summarize(self, intervals, *, orm_events=None, query_events=None, result_events=None):
+    def summarize(self, intervals, *, orm_events=None, query_events=None, result_events=None,
+                  profile_result_detail=False, overhead_events=None):
         """Check call boundaries after each pass and reconcile to its exact outer timers."""
         calls = dict.fromkeys(FINALIZE_OPERATIONS, 0)
         elapsed = dict.fromkeys(FINALIZE_OPERATIONS, 0)
@@ -190,6 +219,17 @@ class FinalizeProbe:
         detail = split_query_time(windows, query_events, orm_events, drivers)
         summary.update(query_ms=detail["ms"], query_calls=detail["calls"])
         if result_events is not None:
-            detail = split_result_time(windows, result_events, query_events, orm_events, drivers)
+            detail = split_result_time(windows, result_events, query_events, orm_events, drivers,
+                                       profile_detail=profile_result_detail)
             summary.update(result_ms=detail["ms"], result_calls=detail["calls"])
+            if profile_result_detail:
+                summary.update(result_detail_ms=detail["result_detail_ms"],
+                               result_detail_calls=detail["result_detail_calls"])
+            if overhead_events is not None:
+                timed_calls = len(drivers) + len(orm_events) + len(query_events) + len(result_events)
+                if len(overhead_events) != timed_calls:
+                    raise RuntimeError("Expected one wrapper envelope per measured finalization call")
+                overhead = split_overhead_time(windows, overhead_events, result_events,
+                                               query_events, orm_events, drivers)
+                summary.update(overhead_ms=overhead["ms"], overhead_calls=overhead["calls"])
         return summary

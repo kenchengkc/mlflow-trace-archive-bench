@@ -59,7 +59,7 @@ def _phase_row(intervals, count, selection_end, selection_ns, pass_end, total_ns
 
 def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False,
                   profile_finalization=False, profile_orm=False, profile_queries=False,
-                  profile_results=False) -> list[dict]:
+                  profile_results=False, profile_result_detail=False, profile_timer_overhead=False) -> list[dict]:
     """Check selected and successfully archived IDs against an independent ordered oracle."""
     expected_ids = list(expected_ids)
     if len(set(expected_ids)) != len(expected_ids):
@@ -93,33 +93,47 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
     orm = None
     queries = None
     results = None
+    overhead = None
+    profile_result_detail = profile_result_detail or profile_timer_overhead
+    profile_results = profile_results or profile_result_detail
     profile_queries = profile_queries or profile_results
     profile_orm = profile_orm or profile_queries
     profile_finalization = profile_finalization or profile_orm
     profile_phases = profile_phases or profile_finalization
     with ExitStack() as stack:
+        def install(timer):
+            if overhead is not None:
+                overhead.instrument(timer)
+            timer.install(stack)
+
         stack.enter_context(patch.object(store, "_plan_trace_archival", new=timed_plan))
         stack.enter_context(patch.object(store, "_archive_trace_candidate", new=observe_archive))
         if profile_finalization:
             from finalize_probe import FinalizeProbe
 
             probe = FinalizeProbe(store.engine.dialect)
-            probe.install(stack)
+            if profile_timer_overhead:
+                from timer_overhead import TimerOverhead
+
+                overhead = TimerOverhead(probe)
+            install(probe)
         if profile_orm:
             from orm_probe import OrmProbe
 
             orm = OrmProbe(probe)
-            orm.install(stack)
+            install(orm)
         if profile_queries:
             from query_probe import QueryProbe
 
             queries = QueryProbe(probe)
-            queries.install(stack)
+            install(queries)
         if profile_results:
             from result_probe import ResultProbe
 
-            results = ResultProbe(probe)
-            results.install(stack)
+            results = ResultProbe(probe, profile_detail=profile_result_detail)
+            install(results)
+        if overhead is not None:
+            overhead.install_custom(stack)
         if profile_phases:
             _install_phase_timers(stack, store, intervals, probe)
         while True:
@@ -134,6 +148,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 queries.reset()
             if results is not None:
                 results.events.clear()
+            if overhead is not None:
+                overhead.events.clear()
             started = perf_counter_ns()
             count = store.archive_traces(
                 resolved_trace_archival_location=archive_uri,
@@ -165,6 +181,8 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                     intervals, orm_events=None if orm is None else orm.events,
                     query_events=None if queries is None else queries.events,
                     result_events=None if results is None else results.events,
+                    profile_result_detail=profile_result_detail,
+                    overhead_events=None if overhead is None else overhead.events,
                 )
                 row["finalization_ms"] = detail["ms"]
                 row["finalization_calls"] = detail["calls"]
@@ -178,6 +196,12 @@ def measure_drain(store, archive_uri: str, expected_ids, *, profile_phases=False
                 if results is not None:
                     row["result_ms"] = detail["result_ms"]
                     row["result_calls"] = detail["result_calls"]
+                if profile_result_detail:
+                    row["result_detail_ms"] = detail["result_detail_ms"]
+                    row["result_detail_calls"] = detail["result_detail_calls"]
+                if overhead is not None:
+                    row["overhead_ms"] = detail["overhead_ms"]
+                    row["overhead_calls"] = detail["overhead_calls"]
             rows.append(row)
             if count == 0:
                 return rows
