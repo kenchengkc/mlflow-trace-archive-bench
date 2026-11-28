@@ -8,6 +8,7 @@ __pycache__/
 /drain-queries.json.gz
 /drain-results.json.gz
 /result-timing/
+/row-consumption/
 /chunk-study.json.gz
 /chunk-ingest.json.gz
 /payload-study.json.gz

@@ -46,6 +46,7 @@ def summarize(rounds):
                                      ("query", "orm_ms", "other"),
                                      ("result", "query_ms", "other"),
                                      ("result_detail", "result_ms", "results"),
+                                     ("consumption", "result_detail_ms", "consumption"),
                                      ("overhead", "result_ms", "other")):
             times, calls = name + "_ms", name + "_calls"
             if times not in rows[0]:
@@ -60,18 +61,18 @@ def summarize(rounds):
                 for op, ms in operation_totals.items()
             }
             group[calls] = {op: sum(row[calls][op] for row in rows) for op in rows[0][calls]}
-        if "query_cache_counts" in rows[0]:
-            group["query_cache_counts"] = {
-                key: sum(row["query_cache_counts"][key] for row in rows)
-                for key in rows[0]["query_cache_counts"]
-            }
+        for counts in ("query_cache_counts", "consumption_counts"):
+            if counts in rows[0]:
+                group[counts] = {key: sum(row[counts][key] for row in rows) for key in rows[0][counts]}
+        if "eager_tag_load_ms" in rows[0]:
+            group["mean_eager_tag_load_ms"] = fsum(row["eager_tag_load_ms"] for row in rows) / len(rows)
         summary.append(group)
     return summary
 
 
 def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False,
         profile_orm=False, profile_queries=False, profile_results=False,
-        profile_result_detail=False, profile_timer_overhead=False):
+        profile_result_detail=False, profile_timer_overhead=False, profile_consumption=False):
     if rounds < 1 or traces < 1:
         raise ValueError("rounds and traces must be positive")
     report = {
@@ -83,7 +84,7 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
         "selection_interval": "Elapsed time inside _plan_trace_archival within each archive_traces call.",
         "total_interval": "Elapsed time around the full synchronous archive_traces call, including selection.",
     }
-    profile_result_detail = profile_result_detail or profile_timer_overhead
+    profile_result_detail = profile_result_detail or profile_timer_overhead or profile_consumption
     profile_results = profile_results or profile_result_detail
     profile_queries = profile_queries or profile_results
     profile_orm = profile_orm or profile_queries
@@ -144,6 +145,22 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
             "Partition result_ms.results using the same hook timestamps. Setup prepares ORM results, "
             "filtering configures scalar/unique adapters, and consumption reads rows and applies those filters."
         )
+    if profile_consumption:
+        report["consumption_interval"] = (
+            "Partition result_detail_ms.consumption after excluding work assigned to earlier timers. "
+            "Nested operations retain their own time. Counts include timed calls even when masked."
+        )
+        report["consumption_boundaries"] = {
+            "iteration": "Advance the single-row consumer's iterator, including end-of-result pulls.",
+            "uniqueness": "Run the single-row uniqueness branch, including preparing the first identity "
+                          "and comparing any additional rows; iterator pulls are timed separately.",
+            "eager_tags": "Load the SqlTraceInfo.tags relationship through SQLAlchemy's select-in loader.",
+            "other": "Remaining time inside row consumption outside these operations.",
+        }
+        report["eager_tag_load_interval"] = (
+            "Elapsed time in the tag loader including nested database and ORM calls. "
+            "This reference measurement overlaps other timers."
+        )
     if profile_timer_overhead:
         report["overhead_interval"] = (
             "Partition result_ms.other. Bookkeeping is time within additional timers surrounding the existing "
@@ -160,7 +177,8 @@ def run(rounds=7, traces=92, *, profile_phases=False, profile_finalization=False
                                    profile_finalization=profile_finalization, profile_orm=profile_orm,
                                    profile_queries=profile_queries, profile_results=profile_results,
                                    profile_result_detail=profile_result_detail,
-                                   profile_timer_overhead=profile_timer_overhead)
+                                   profile_timer_overhead=profile_timer_overhead,
+                                   profile_consumption=profile_consumption)
             verification = verify_readback(store, sql, expected, archive_root)
             report["rounds"].append({"round": number, "passes": passes, "readback": verification})
     report["summary"] = summarize(report["rounds"])

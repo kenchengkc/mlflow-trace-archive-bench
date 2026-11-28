@@ -1,6 +1,6 @@
 """Attribute finalization wall time to nested MLflow, SQLAlchemy and psycopg2 operations."""
 
-from itertools import chain
+from itertools import chain, pairwise
 from time import perf_counter_ns
 from unittest.mock import patch
 
@@ -13,6 +13,7 @@ ORM_OPERATIONS = ("fetch", "objects", "session")
 QUERY_OPERATIONS = ("construction", "compile_cache", "compilation", "dispatch")
 RESULT_OPERATIONS = ("eligibility", "results")
 RESULT_DETAIL_OPERATIONS = ("setup", "filtering", "consumption")
+CONSUMPTION_OPERATIONS = ("iteration", "uniqueness", "eager_tags")
 
 
 def _split_ns(windows, events, excluded, operations):
@@ -86,18 +87,34 @@ def split_query_time(windows, query_events, orm_events, driver_events):
     return _split_time(windows, query_events, excluded, QUERY_OPERATIONS)
 
 
+def _outside_consumption(windows, result_events):
+    """Exclude each slice whose innermost existing result operation is not consumption."""
+    for start, end in windows:
+        events = [event for event in result_events if start <= event[0] <= event[1] <= end]
+        # An inner scope has the shortest extent. Stable sorting preserves return
+        # order for coincident scopes, where the inner call records its event first.
+        events.sort(key=lambda event: event[1] - event[0])
+        boundaries = {start, end}
+        for left, right, _ in events:
+            boundaries.update((left, right))
+        for left, right in pairwise(sorted(boundaries)):
+            owner = next((kind for a, b, kind in events if a <= left and right <= b), None)
+            if owner != "consumption":
+                yield left, right
+
+
 def split_result_time(windows, result_events, query_events, orm_events, driver_events,
-                      *, profile_detail=False):
+                      *, profile_detail=False, consumption_events=None):
     """Partition the query remainder between eligibility, result processing and other work."""
     excluded = [(start, end) for start, end, _ in chain(query_events, orm_events, driver_events)]
-    if not profile_detail:
+    if not profile_detail and consumption_events is None:
         return _split_time(windows, result_events, excluded, RESULT_OPERATIONS)
     # Only the labels change. Splitting all four kinds of event together preserves
     # nesting between eligibility and consumption, including coincident timestamps.
     calls, ns = _split_ns(windows, result_events, excluded, ("eligibility", *RESULT_DETAIL_OPERATIONS))
     result_calls = {k: calls[k] for k in RESULT_DETAIL_OPERATIONS}
     result_ns = {k: ns[k] for k in RESULT_DETAIL_OPERATIONS}
-    return {
+    detail = {
         "calls": {"eligibility": calls["eligibility"], "results": sum(result_calls.values())},
         "ms": {
             "eligibility": ns["eligibility"] / 1e6, "results": sum(result_ns.values()) / 1e6,
@@ -106,6 +123,13 @@ def split_result_time(windows, result_events, query_events, orm_events, driver_e
         "result_detail_calls": result_calls,
         "result_detail_ms": {k: value / 1e6 for k, value in result_ns.items()},
     }
+    if consumption_events is not None:
+        excluded.extend(_outside_consumption(windows, result_events))
+        calls, parts = _split_ns(windows, consumption_events, excluded, CONSUMPTION_OPERATIONS)
+        if sum(parts.values()) != result_ns["consumption"]:
+            raise RuntimeError("Row-consumption intervals do not reconcile to their parent")
+        detail.update(consumption_calls=calls, consumption_ms={k: value / 1e6 for k, value in parts.items()})
+    return detail
 
 
 def split_overhead_time(windows, overhead_events, result_events, query_events, orm_events, driver_events):
@@ -180,10 +204,11 @@ class FinalizeProbe:
         return finalize
 
     def summarize(self, intervals, *, orm_events=None, query_events=None, result_events=None,
-                  profile_result_detail=False, overhead_events=None):
+                  profile_result_detail=False, overhead_events=None, consumption_events=None):
         """Check call boundaries after each pass and reconcile to its exact outer timers."""
         calls = dict.fromkeys(FINALIZE_OPERATIONS, 0)
         elapsed = dict.fromkeys(FINALIZE_OPERATIONS, 0)
+        tag_reads = []
         index = 0
         total = 0
         for phase, start, end in intervals:
@@ -198,6 +223,8 @@ class FinalizeProbe:
                     raise RuntimeError("Driver calls overlap or fall outside database finalization")
                 if operation == "sql":
                     operation = _sql_operation(statement)
+                if consumption_events is not None and operation == "read_trace_tags":
+                    tag_reads.append((before, after))
                 calls[operation] += 1
                 elapsed[operation] += after - before
                 previous_end = after
@@ -220,11 +247,22 @@ class FinalizeProbe:
         summary.update(query_ms=detail["ms"], query_calls=detail["calls"])
         if result_events is not None:
             detail = split_result_time(windows, result_events, query_events, orm_events, drivers,
-                                       profile_detail=profile_result_detail)
+                                       profile_detail=profile_result_detail, consumption_events=consumption_events)
             summary.update(result_ms=detail["ms"], result_calls=detail["calls"])
-            if profile_result_detail:
+            if profile_result_detail or consumption_events is not None:
                 summary.update(result_detail_ms=detail["result_detail_ms"],
                                result_detail_calls=detail["result_detail_calls"])
+            if consumption_events is not None:
+                loads = sorted((a, b) for a, b, kind in consumption_events if kind == "eager_tags")
+                if any(previous[1] > following[0] for previous, following in pairwise(loads)):
+                    raise RuntimeError("Unexpected overlapping eager tag loads")
+                if len(loads) != len(tag_reads) or any(
+                    not start <= before <= after <= end
+                    for (start, end), (before, after) in zip(loads, tag_reads)
+                ):
+                    raise RuntimeError("Expected one trace-tag SELECT inside each eager tag load")
+                summary.update(consumption_ms=detail["consumption_ms"], consumption_calls=detail["consumption_calls"],
+                               eager_tag_load_ms=sum(end - start for start, end in loads) / 1e6)
             if overhead_events is not None:
                 timed_calls = len(drivers) + len(orm_events) + len(query_events) + len(result_events)
                 if len(overhead_events) != timed_calls:

@@ -44,6 +44,10 @@ on:
         description: Archive three traces per pass until the queue is empty
         type: boolean
         default: false
+      row_consumption:
+        description: Compare row iteration, uniqueness checks and eager tag loading
+        type: boolean
+        default: false
       upsert_study:
         description: Measure PostgreSQL execution, WAL and TOAST for real MLflow span upserts
         type: boolean
@@ -78,7 +82,7 @@ jobs:
             matched-queues.json.gz
           if-no-files-found: error
   driver-study:
-    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study)
+    if: github.event_name == 'workflow_dispatch' && (inputs.driver_study || inputs.two_step_study || inputs.chunk_study || inputs.chunk_ingest || inputs.payload_study || inputs.phase_study || inputs.upsert_study || inputs.drain_study || inputs.row_consumption)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -147,6 +151,17 @@ jobs:
         with:
           name: result-timing
           path: result-timing/*.json.gz
+          if-no-files-found: error
+      - name: Verify and measure row consumption on matched queues
+        if: inputs.row_consumption
+        run: |
+          python -m unittest -v test_row_consumption test_consumption_account test_detail_drain
+          python result_timing_study.py --study consumption --rounds 7 --traces 92 --output-dir row-consumption >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.row_consumption
+        with:
+          name: row-consumption
+          path: row-consumption/*.json.gz
           if-no-files-found: error
       - name: Check the migrated fixtures and concurrent writes
         if: inputs.driver_study || inputs.two_step_study
